@@ -826,22 +826,22 @@ def main():
     token = os.getenv('TELEGRAM_BOT_TOKEN')
 
     if not token:
-        print("❌ Ошибка: TELEGRAM_BOT_TOKEN не найден в .env файле")
-        print("Создайте файл .env и добавьте: TELEGRAM_BOT_TOKEN=ваш_токен")
+        print("❌ Ошибка: TELEGRAM_BOT_TOKEN не найден")
         return
 
     # Создаем папку для данных
     os.makedirs("data", exist_ok=True)
 
-    # Запускаем Flask в отдельном потоке (для keep_alive)
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    logger.info("🌐 Flask сервер запущен для keep_alive")
+    # ЗАПУСКАЕМ FLASK В ОТДЕЛЬНОМ ПРОЦЕССЕ (не в потоке)
+    import multiprocessing
+    flask_process = multiprocessing.Process(target=run_flask, daemon=True)
+    flask_process.start()
+    logger.info("🌐 Flask сервер запущен для keep_alive в отдельном процессе")
 
     # Создаем приложение Telegram бота
     application = Application.builder().token(token).build()
 
-    # Удаляем вебхук при запуске (решает проблему конфликта)
+    # Удаляем вебхук при запуске
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -874,7 +874,7 @@ def main():
     else:
         logger.warning("⚠️ JobQueue не доступен. Установите: pip install 'python-telegram-bot[job-queue]'")
 
-    # Запуск бота
+    # ЗАПУСКАЕМ БОТА
     logger.info("🚀 Бот запущен и готов к работе!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
