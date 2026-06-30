@@ -358,7 +358,10 @@ async def schedule_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "❌ Сначала установи преподавателя или группу!\n\n"
             "Используй команды:\n"
             "/set_teacher Фамилия И.О.\n"
-            "/set_group Номер_группы",
+            "/set_group Номер_группы\n\n"
+            "Примеры:\n"
+            "/set_teacher Хаджинова Н.В.\n"
+            "/set_group 60131",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
@@ -401,7 +404,10 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not db_user:
         keyboard = [[InlineKeyboardButton("🔙 В меню", callback_data="back_to_main")]]
         await query.edit_message_text(
-            "❌ Сначала используй /start",
+            "❌ Сначала используй /start\n\n"
+            "Или установи преподавателя/группу:\n"
+            "/set_teacher Фамилия И.О.\n"
+            "/set_group Номер_группы",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
@@ -1081,6 +1087,17 @@ def main():
     if job_queue:
         job_queue.run_repeating(check_changes, interval=300, first=10)
         logger.info("⏰ Фоновый планировщик запущен (проверка каждые 5 минут)")
+
+    # Очистка старых уведомлений при запуске
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE schedule_changes SET notified = 1 WHERE notified = 0")
+        conn.commit()
+        conn.close()
+        logger.info("✅ Старые уведомления очищены")
+    except Exception as e:
+        logger.error(f"Ошибка очистки уведомлений: {e}")
 
     logger.info("🚀 Бот запущен и готов к работе!")
 
