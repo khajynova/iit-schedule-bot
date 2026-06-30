@@ -754,16 +754,12 @@ def main():
 
     if not token:
         print("❌ Ошибка: TELEGRAM_BOT_TOKEN не найден в .env файле")
-        print("Создайте файл .env и добавьте: TELEGRAM_BOT_TOKEN=ваш_токен")
         return
 
-    # Создаем папку для данных
     os.makedirs("data", exist_ok=True)
 
-    # Создаем приложение Telegram бота
     application = Application.builder().token(token).build()
 
-    # Удаляем вебхук при запуске
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -773,7 +769,7 @@ def main():
     except Exception as e:
         logger.error(f"Ошибка при удалении вебхука: {e}")
 
-    # Регистрируем обработчики команд
+    # Регистрируем обработчики
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("set_teacher", set_teacher))
     application.add_handler(CommandHandler("today", today))
@@ -784,21 +780,28 @@ def main():
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("help", help_command))
 
-    # Регистрируем обработчики кнопок
     application.add_handler(CallbackQueryHandler(button_callback, pattern="^(today|tomorrow|week|set_teacher|settings|help)$"))
     application.add_handler(CallbackQueryHandler(settings_callback, pattern="^(notifications_on|notifications_off|stats|remove_teacher)$"))
 
-    # Настройка фоновой задачи для проверки изменений (каждые 5 минут)
     job_queue = application.job_queue
     if job_queue:
         job_queue.run_repeating(check_changes, interval=300, first=10)
         logger.info("⏰ Фоновый планировщик запущен (проверка каждые 5 минут)")
-    else:
-        logger.warning("⚠️ JobQueue не доступен. Установите: pip install 'python-telegram-bot[job-queue]'")
 
-    # Запуск бота
     logger.info("🚀 Бот запущен и готов к работе!")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+    # ИСПРАВЛЕНИЕ ДЛЯ PYTHON 3.14
+    try:
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
+    except RuntimeError as e:
+        if "Event loop is closed" in str(e):
+            logger.warning("Перезапуск с новым event loop...")
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            application.run_polling(allowed_updates=Update.ALL_TYPES)
+        else:
+            raise
 
 if __name__ == '__main__':
     main()
