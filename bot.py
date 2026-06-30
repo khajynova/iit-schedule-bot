@@ -12,6 +12,8 @@ from telegram.ext import (
 import os
 from dotenv import load_dotenv
 import json
+import threading
+from flask import Flask
 
 # Импортируем нашу базу данных
 from database import Database
@@ -39,6 +41,27 @@ DAY_NAMES = {
     'saturday': 'Суббота',
     'sunday': 'Воскресенье'
 }
+
+# ============ KEEP ALIVE ФУНКЦИЯ ============
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "🤖 Бот для расписания БГУИР ФКТ работает!"
+
+@app.route('/health')
+def health():
+    return "OK", 200
+
+def run_flask():
+    """Запускает Flask сервер для keep_alive"""
+    try:
+        port = int(os.environ.get('PORT', 10000))
+        app.run(host='0.0.0.0', port=port, debug=False)
+    except Exception as e:
+        logger.error(f"Ошибка запуска Flask: {e}")
+
+# ===========================================
 
 # Функция для получения расписания
 def get_schedule_for_teacher(teacher_name, page_limit=10):
@@ -798,7 +821,7 @@ async def notify_user(bot, user_id):
 
 def main():
     """Основная функция запуска бота"""
-    # Токен бота - получите у @BotFather в Telegram
+    # Токен бота
     token = os.getenv('TELEGRAM_BOT_TOKEN')
 
     if not token:
@@ -806,10 +829,15 @@ def main():
         print("Создайте файл .env и добавьте: TELEGRAM_BOT_TOKEN=ваш_токен")
         return
 
-    # Создаем папку для данных, если её нет
+    # Создаем папку для данных
     os.makedirs("data", exist_ok=True)
 
-    # Создаем приложение
+    # Запускаем Flask в отдельном потоке (для keep_alive)
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info("🌐 Flask сервер запущен для keep_alive")
+
+    # Создаем приложение Telegram бота
     application = Application.builder().token(token).build()
 
     # Удаляем вебхук при запуске (решает проблему конфликта)
@@ -818,6 +846,7 @@ def main():
         asyncio.set_event_loop(loop)
         loop.run_until_complete(reset_webhook(application))
         loop.close()
+        logger.info("🔗 Вебхук успешно сброшен")
     except Exception as e:
         logger.error(f"Ошибка при удалении вебхука: {e}")
 
@@ -840,12 +869,12 @@ def main():
     job_queue = application.job_queue
     if job_queue:
         job_queue.run_repeating(check_changes, interval=300, first=10)
-        logger.info("Фоновый планировщик запущен (проверка каждые 5 минут)")
+        logger.info("⏰ Фоновый планировщик запущен (проверка каждые 5 минут)")
     else:
-        logger.warning("JobQueue не доступен. Установите: pip install 'python-telegram-bot[job-queue]'")
+        logger.warning("⚠️ JobQueue не доступен. Установите: pip install 'python-telegram-bot[job-queue]'")
 
     # Запуск бота
-    logger.info("🚀 Бот запущен!")
+    logger.info("🚀 Бот запущен и готов к работе!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
