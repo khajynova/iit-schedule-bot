@@ -704,7 +704,6 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Сначала установи преподавателя.")
         return
 
-    # Создаем callback_query и вызываем today_callback
     class MockQuery:
         def __init__(self, user_id):
             self.from_user = type('obj', (object,), {'id': user_id})
@@ -881,14 +880,21 @@ def main():
 
     os.makedirs("data", exist_ok=True)
 
+    # Создаем новый event loop для Python 3.14
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
     application = Application.builder().token(token).build()
 
     # Удаляем вебхук при запуске
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
         loop.run_until_complete(reset_webhook(application))
-        loop.close()
         logger.info("🔗 Вебхук успешно сброшен")
     except Exception as e:
         logger.error(f"Ошибка при удалении вебхука: {e}")
@@ -914,17 +920,8 @@ def main():
 
     logger.info("🚀 Бот запущен и готов к работе!")
 
-    # Запускаем бота с обработкой ошибки event loop
-    try:
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
-    except RuntimeError as e:
-        if "Event loop is closed" in str(e):
-            logger.warning("Event loop closed, restarting...")
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            application.run_polling(allowed_updates=Update.ALL_TYPES)
-        else:
-            raise
+    # Запускаем бота
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()
