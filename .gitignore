@@ -1,3 +1,4 @@
+# Игнорируемые файлы для Git
 # Python
 __pycache__/
 *.py[cod]
