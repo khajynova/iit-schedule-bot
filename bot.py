@@ -179,12 +179,13 @@ def get_schedule_for_group(group_name, page_limit=10, date_filter=None):
 def get_schedule_for_search(search_query, page_limit=10, date_filter=None):
     """
     Универсальная функция - определяет, что искать автоматически
-    Если запрос состоит только из цифр - это группа, иначе преподаватель
+    Если запрос состоит только из цифр и дефисов - это группа, иначе преподаватель
     """
     # Очищаем запрос от лишних пробелов
     clean_query = search_query.strip()
-    # Проверяем, состоит ли запрос только из цифр (с возможными пробелами)
-    is_group = clean_query.replace(" ", "").isdigit()
+    # Проверяем, состоит ли запрос только из цифр и дефисов (с возможными пробелами)
+    clean_for_check = clean_query.replace(" ", "").replace("-", "")
+    is_group = clean_for_check.isdigit()
 
     if is_group:
         return get_schedule_for_group(clean_query, page_limit, date_filter)
@@ -309,8 +310,8 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id=
 
     # Определяем тип запроса для отображения
     if search_query != "❌ не установлен":
-        clean_query = search_query.strip()
-        if clean_query.replace(" ", "").isdigit():
+        clean_query = search_query.replace(" ", "").replace("-", "")
+        if clean_query.isdigit():
             display_text = f"Группа: {search_query}"
         else:
             display_text = f"Преподаватель: {search_query}"
@@ -355,8 +356,9 @@ async def schedule_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("🔙 В меню", callback_data="back_to_main")]]
         await query.edit_message_text(
             "❌ Сначала установи преподавателя или группу!\n\n"
-            "Используй команду:\n"
-            "/set_teacher Фамилия И.О. или номер группы",
+            "Используй команды:\n"
+            "/set_teacher Фамилия И.О.\n"
+            "/set_group Номер_группы",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
@@ -364,8 +366,8 @@ async def schedule_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     search_query = db_user[4]
 
     # Определяем тип запроса для отображения
-    clean_query = search_query.strip()
-    if clean_query.replace(" ", "").isdigit():
+    clean_query = search_query.replace(" ", "").replace("-", "")
+    if clean_query.isdigit():
         display_text = f"Группа: {search_query}"
     else:
         display_text = f"Преподаватель: {search_query}"
@@ -409,8 +411,8 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Определяем тип запроса для отображения
     if search_query != "не установлен":
-        clean_query = search_query.strip()
-        if clean_query.replace(" ", "").isdigit():
+        clean_query = search_query.replace(" ", "").replace("-", "")
+        if clean_query.isdigit():
             display_text = f"Группа: {search_query}"
         else:
             display_text = f"Преподаватель: {search_query}"
@@ -447,11 +449,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         welcome_text = (
             f"👋 Привет, {user.first_name}!\n\n"
             "Я бот для отслеживания расписания ИИТ БГУИР.\n\n"
-            "📌 Установи преподавателя или группу командой:\n"
-            "/set_teacher Фамилия И.О. или номер группы\n\n"
+            "📌 Установи преподавателя или группу:\n"
+            "/set_teacher Фамилия И.О. - преподаватель\n"
+            "/set_group Номер_группы - группа\n\n"
             "Примеры:\n"
             "/set_teacher Хаджинова Н.В.\n"
-            "/set_teacher 60131\n\n"
+            "/set_group 60131\n\n"
             "🔔 После установки я буду отслеживать изменения в расписании."
         )
         await update.message.reply_text(welcome_text)
@@ -460,38 +463,72 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Пользователь уже есть - показываем главное меню
         await main_menu(update, context)
 
-# ============ УСТАНОВКА ПРЕПОДАВАТЕЛЯ ИЛИ ГРУППЫ ============
+# ============ УСТАНОВКА ПРЕПОДАВАТЕЛЯ ============
 async def set_teacher(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Установка преподавателя или группы для отслеживания"""
+    """Установка преподавателя для отслеживания"""
     user_id = update.effective_user.id
 
     if not context.args:
         await update.message.reply_text(
-            "❌ Пожалуйста, укажи ФИО преподавателя или номер группы.\n"
-            "Примеры:\n"
-            "/set_teacher Хаджинова Н.В.\n"
-            "/set_teacher 60131"
+            "❌ Пожалуйста, укажи ФИО преподавателя.\n"
+            "Пример: /set_teacher Хаджинова Н.В."
         )
         return
 
-    search_query = " ".join(context.args).strip()
-
-    # Определяем, что ищем - группу или преподавателя
-    # Если запрос состоит только из цифр (с возможными пробелами) - это группа
-    is_group = search_query.replace(" ", "").isdigit()
+    teacher_name = " ".join(context.args).strip()
 
     status_msg = await update.message.reply_text("⏳ Поиск расписания...")
 
-    if is_group:
-        schedule = get_schedule_for_group(search_query, page_limit=3)
-        search_type = "группы"
-    else:
-        schedule = get_schedule_for_teacher(search_query, page_limit=3)
-        search_type = "преподавателя"
+    schedule = get_schedule_for_teacher(teacher_name, page_limit=3)
 
     if not schedule:
         await status_msg.edit_text(
-            f"❌ {search_type.capitalize()} '{search_query}' не найден(а).\n"
+            f"❌ Преподаватель '{teacher_name}' не найден.\n"
+            "Проверь правильность написания ФИО."
+        )
+        return
+
+    db.add_user(user_id, update.effective_user.username,
+                update.effective_user.first_name,
+                update.effective_user.last_name,
+                teacher_name)
+
+    db.save_schedule_cache(user_id, teacher_name, schedule)
+
+    grouped = get_lessons_by_date(schedule)
+
+    await status_msg.edit_text(
+        f"✅ Преподаватель *{teacher_name}* установлен!\n\n"
+        f"📊 Найдено *{len(schedule)}* занятий в расписании.\n"
+        f"📅 Всего дней: *{len(grouped)}*\n\n"
+        "Теперь я буду отслеживать изменения.",
+        parse_mode="Markdown"
+    )
+
+    # Показываем главное меню
+    await main_menu(update, context)
+
+# ============ УСТАНОВКА ГРУППЫ ============
+async def set_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Установка группы для отслеживания"""
+    user_id = update.effective_user.id
+
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Пожалуйста, укажи номер группы.\n"
+            "Пример: /set_group 60131"
+        )
+        return
+
+    group_name = " ".join(context.args).strip()
+
+    status_msg = await update.message.reply_text("⏳ Поиск расписания...")
+
+    schedule = get_schedule_for_group(group_name, page_limit=3)
+
+    if not schedule:
+        await status_msg.edit_text(
+            f"❌ Группа '{group_name}' не найдена.\n"
             "Проверь правильность написания."
         )
         return
@@ -499,14 +536,14 @@ async def set_teacher(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.add_user(user_id, update.effective_user.username,
                 update.effective_user.first_name,
                 update.effective_user.last_name,
-                search_query)
+                group_name)
 
-    db.save_schedule_cache(user_id, search_query, schedule)
+    db.save_schedule_cache(user_id, group_name, schedule)
 
     grouped = get_lessons_by_date(schedule)
 
     await status_msg.edit_text(
-        f"✅ {search_type.capitalize()} *{search_query}* установлен(а)!\n\n"
+        f"✅ Группа *{group_name}* установлена!\n\n"
         f"📊 Найдено *{len(schedule)}* занятий в расписании.\n"
         f"📅 Всего дней: *{len(grouped)}*\n\n"
         "Теперь я буду отслеживать изменения.",
@@ -883,7 +920,7 @@ async def remove_teacher(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 update.effective_user.last_name, "")
     await update.message.reply_text(
         "✅ Преподаватель/группа удалены.\n"
-        "Используй /set_teacher чтобы установить нового."
+        "Используй /set_teacher или /set_group чтобы установить новый."
     )
 
 async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -911,14 +948,18 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🤖 *Помощь по боту*\n\n"
         "📌 *Основные команды:*\n"
         "/start - Главное меню\n"
-        "/set_teacher ФИО или группа - Установить преподавателя или группу\n"
+        "/set_teacher ФИО - Установить преподавателя\n"
+        "/set_group Номер_группы - Установить группу\n"
         "/today - Расписание на сегодня\n"
         "/tomorrow - Расписание на завтра\n"
         "/week - Расписание на неделю\n"
         "/settings - Настройки\n"
         "/remove_teacher - Удалить преподавателя/группу\n"
         "/help - Эта справка\n\n"
-        "📱 Используй кнопки для быстрого доступа."
+        "📱 Используй кнопки для быстрого доступа.\n\n"
+        "Примеры:\n"
+        "/set_teacher Хаджинова Н.В.\n"
+        "/set_group 60131"
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
@@ -1024,6 +1065,7 @@ def main():
     # Регистрируем обработчики команд
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("set_teacher", set_teacher))
+    application.add_handler(CommandHandler("set_group", set_group))
     application.add_handler(CommandHandler("today", today))
     application.add_handler(CommandHandler("tomorrow", tomorrow))
     application.add_handler(CommandHandler("week", week))
