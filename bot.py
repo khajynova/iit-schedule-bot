@@ -68,7 +68,6 @@ def get_schedule_for_teacher(teacher_name, page_limit=10):
             all_results.extend(results)
             pages_loaded += 1
 
-            # Проверяем, есть ли следующая страница
             if not data.get("next"):
                 break
 
@@ -131,6 +130,27 @@ def get_lessons_by_date(lessons):
             grouped[date].append(lesson)
     return grouped
 
+def filter_lessons_by_week(lessons, target_date=None):
+    """Фильтрует занятия по текущей неделе"""
+    if target_date is None:
+        target_date = datetime.now()
+
+    # Находим начало недели (понедельник)
+    start_of_week = target_date - timedelta(days=target_date.weekday())
+    start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_of_week = start_of_week + timedelta(days=6)
+    end_of_week = end_of_week.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+    filtered = []
+    for lesson in lessons:
+        date_str = lesson.get('date', '')
+        if date_str:
+            lesson_date = datetime.strptime(date_str, "%Y-%m-%d")
+            if start_of_week <= lesson_date <= end_of_week:
+                filtered.append(lesson)
+
+    return filtered
+
 async def reset_webhook(application):
     """Принудительно удаляет вебхук перед запуском"""
     try:
@@ -145,7 +165,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
 
     db_user = db.get_user(user_id)
+
     if not db_user:
+        # Новый пользователь
         keyboard = [
             [InlineKeyboardButton("📚 Установить преподавателя", callback_data="set_teacher")],
             [InlineKeyboardButton("📅 Расписание на сегодня", callback_data="today")],
@@ -168,9 +190,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "Для начала работы, пожалуйста, установи преподавателя командой:\n"
             "/set_teacher Фамилия И.О.\n\n"
-            "Пример: /set_teacher Иванов А.А."
+            "Пример: /set_teacher Хаджинова Н.В."
         )
     else:
+        # Пользователь уже есть
         teacher = db_user[4] if db_user[4] else "не установлен"
 
         keyboard = [
@@ -200,7 +223,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             "📚 Установи преподавателя командой:\n"
             "/set_teacher Фамилия И.О.\n\n"
-            "Пример: /set_teacher Иванов А.А."
+            "Пример: /set_teacher Хаджинова Н.В."
         )
         return
 
@@ -322,7 +345,9 @@ async def week_callback(query, context):
         await query.edit_message_text("❌ Не удалось получить расписание.")
         return
 
-    formatted = format_lessons_for_display(schedule)
+    # Фильтруем по текущей неделе
+    week_lessons = filter_lessons_by_week(schedule)
+    formatted = format_lessons_for_display(week_lessons)
 
     keyboard = [
         [InlineKeyboardButton("📅 Сегодня", callback_data="today")],
@@ -355,7 +380,7 @@ async def set_teacher(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
             "❌ Пожалуйста, укажи ФИО преподавателя.\n"
-            "Пример: /set_teacher Иванов А.А."
+            "Пример: /set_teacher Хаджинова Н.В."
         )
         return
 
@@ -486,7 +511,9 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text("❌ Не удалось получить расписание.")
         return
 
-    formatted = format_lessons_for_display(schedule)
+    # Фильтруем по текущей неделе
+    week_lessons = filter_lessons_by_week(schedule)
+    formatted = format_lessons_for_display(week_lessons)
 
     keyboard = [
         [InlineKeyboardButton("📅 Сегодня", callback_data="today")],
@@ -611,19 +638,12 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_stats(query, context=None):
     """Показывает статистику"""
-    if query:
-        user_id = query.from_user.id
-    else:
-        user_id = query.from_user.id
-
+    user_id = query.from_user.id
     stats = db.get_stats(user_id)
 
     if not stats:
         msg = "❌ Нет данных для статистики. Установи преподавателя."
-        if query:
-            await query.edit_message_text(msg)
-        else:
-            await query.message.reply_text(msg)
+        await query.edit_message_text(msg)
         return
 
     msg = (
@@ -636,10 +656,7 @@ async def show_stats(query, context=None):
         f"📅 Последнее занятие: *{stats['last_date']}*\n"
     )
 
-    if query:
-        await query.edit_message_text(msg, parse_mode="Markdown")
-    else:
-        await query.message.reply_text(msg, parse_mode="Markdown")
+    await query.edit_message_text(msg, parse_mode="Markdown")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Помощь"""
@@ -790,7 +807,6 @@ def main():
 
     logger.info("🚀 Бот запущен и готов к работе!")
 
-    # ИСПРАВЛЕНИЕ ДЛЯ PYTHON 3.14
     try:
         application.run_polling(allowed_updates=Update.ALL_TYPES)
     except RuntimeError as e:
