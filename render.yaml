@@ -1,4 +1,3 @@
-# Конфигурация для Render.com
 services:
   - type: worker
     name: iit-schedule-bot

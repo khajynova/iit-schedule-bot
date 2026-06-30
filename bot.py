@@ -1,4 +1,3 @@
-# Основной код бота
 import logging
 import asyncio
 from datetime import datetime, timedelta
@@ -13,8 +12,6 @@ from telegram.ext import (
 import os
 from dotenv import load_dotenv
 import json
-import threading
-from flask import Flask
 
 # Импортируем нашу базу данных
 from database import Database
@@ -42,27 +39,6 @@ DAY_NAMES = {
     'saturday': 'Суббота',
     'sunday': 'Воскресенье'
 }
-
-# ============ KEEP ALIVE ФУНКЦИЯ ============
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "🤖 Бот для расписания БГУИР ФКТ работает!"
-
-@app.route('/health')
-def health():
-    return "OK", 200
-
-def run_flask():
-    """Запускает Flask сервер для keep_alive"""
-    try:
-        port = int(os.environ.get('PORT', 10000))
-        app.run(host='0.0.0.0', port=port, debug=False)
-    except Exception as e:
-        logger.error(f"Ошибка запуска Flask: {e}")
-
-# ===========================================
 
 # Функция для получения расписания
 def get_schedule_for_teacher(teacher_name, page_limit=10):
@@ -102,7 +78,6 @@ def get_schedule_for_teacher(teacher_name, page_limit=10):
         filtered_results = []
         for lesson in all_results:
             info = lesson.get("info", "")
-            # Проверяем, содержит ли info точное ФИО преподавателя
             if teacher_name.lower() in info.lower():
                 filtered_results.append(lesson)
 
@@ -113,11 +88,8 @@ def get_schedule_for_teacher(teacher_name, page_limit=10):
         logger.error(f"Ошибка запроса к API: {e}")
         return []
 
-def format_lessons_for_display(lessons, date_filter=None, compact=False):
-    """
-    Форматирует расписание для вывода пользователю.
-    compact - компактный режим для длинных сообщений
-    """
+def format_lessons_for_display(lessons, date_filter=None):
+    """Форматирует расписание для вывода пользователю."""
     if date_filter:
         filtered = [l for l in lessons if l.get("date") == date_filter]
     else:
@@ -126,11 +98,9 @@ def format_lessons_for_display(lessons, date_filter=None, compact=False):
     if not filtered:
         return "📭 Занятий не найдено."
 
-    # Группировка по датам
     result = []
     current_date = None
 
-    # Сортируем по дате и времени
     sorted_lessons = sorted(filtered, key=lambda x: (x.get('date', ''), x.get('start_time', '')))
 
     for lesson in sorted_lessons:
@@ -142,19 +112,11 @@ def format_lessons_for_display(lessons, date_filter=None, compact=False):
             day_name = DAY_NAMES.get(day_key, day_key.capitalize())
             result.append(f"\n📅 {date_obj.strftime('%d.%m.%Y')} ({day_name})")
 
-        if compact:
-            # Компактный формат
-            result.append(
-                f"  ⏰ {lesson['start_time']} - {lesson['end_time']} | "
-                f"{lesson['info'][:30]}... | 🏫 {lesson['room']}"
-            )
-        else:
-            # Полный формат
-            result.append(
-                f"  ⏰ {lesson['start_time']} - {lesson['end_time']}\n"
-                f"  📚 {lesson['info']}\n"
-                f"  🏫 Ауд. {lesson['room']}\n"
-            )
+        result.append(
+            f"  ⏰ {lesson['start_time']} - {lesson['end_time']}\n"
+            f"  📚 {lesson['info']}\n"
+            f"  🏫 Ауд. {lesson['room']}\n"
+        )
 
     return "\n".join(result)
 
@@ -182,10 +144,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
 
-    # Проверяем, есть ли пользователь в базе
     db_user = db.get_user(user_id)
     if not db_user:
-        # Создаем клавиатуру с кнопками
         keyboard = [
             [InlineKeyboardButton("📚 Установить преподавателя", callback_data="set_teacher")],
             [InlineKeyboardButton("📅 Расписание на сегодня", callback_data="today")],
@@ -196,21 +156,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         welcome_text = (
             f"👋 Привет, {user.first_name}!\n\n"
-            "Я бот для отслеживания расписания преподавателей БГУИР ФКТ.\n\n"
+            "Я бот для отслеживания расписания преподавателей ИИТ БГУИР.\n\n"
             "📌 Используй команду /set_teacher чтобы настроить преподавателя.\n"
             "📅 Используй /today чтобы посмотреть расписание на сегодня.\n"
             "🔔 Я буду автоматически уведомлять тебя об изменениях в расписании."
         )
         await update.message.reply_text(welcome_text, reply_markup=reply_markup)
 
-        # Сохраняем пользователя с временным значением
         db.add_user(user_id, user.username, user.first_name, user.last_name, "")
 
-        # Отправляем инструкцию по настройке
         await update.message.reply_text(
             "Для начала работы, пожалуйста, установи преподавателя командой:\n"
             "/set_teacher Фамилия И.О.\n\n"
-            "Пример: /set_teacher Хаджинова Н.В."
+            "Пример: /set_teacher Иванов А.А."
         )
     else:
         teacher = db_user[4] if db_user[4] else "не установлен"
@@ -236,14 +194,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    user_id = query.from_user.id
     data = query.data
 
     if data == "set_teacher":
         await query.edit_message_text(
             "📚 Установи преподавателя командой:\n"
             "/set_teacher Фамилия И.О.\n\n"
-            "Пример: /set_teacher Хаджинова Н.В."
+            "Пример: /set_teacher Иванов А.А."
         )
         return
 
@@ -281,7 +238,6 @@ async def today_callback(query, context):
 
     teacher_name = db_user[4]
 
-    # Отправляем статус загрузки
     await query.edit_message_text("⏳ Загрузка расписания...")
 
     schedule = get_schedule_for_teacher(teacher_name)
@@ -293,10 +249,8 @@ async def today_callback(query, context):
     today_str = datetime.now().strftime("%Y-%m-%d")
     formatted = format_lessons_for_display(schedule, today_str)
 
-    # Сохраняем кеш
     db.save_schedule_cache(user_id, teacher_name, schedule)
 
-    # Создаем клавиатуру
     keyboard = [
         [InlineKeyboardButton("📅 Завтра", callback_data="tomorrow")],
         [InlineKeyboardButton("📅 Неделя", callback_data="week")]
@@ -376,7 +330,6 @@ async def week_callback(query, context):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # Если сообщение слишком длинное - разбиваем
     if len(formatted) > 4000:
         parts = []
         current_part = "📚 Расписание на неделю:\n\n"
@@ -388,10 +341,8 @@ async def week_callback(query, context):
                 current_part += line + '\n'
         parts.append(current_part)
 
-        # Отправляем первую часть
         await query.edit_message_text(parts[0], parse_mode="Markdown", reply_markup=reply_markup)
 
-        # Отправляем остальные
         for part in parts[1:]:
             await context.bot.send_message(chat_id=user_id, text=part, parse_mode="Markdown")
     else:
@@ -401,20 +352,17 @@ async def set_teacher(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Установка преподавателя для отслеживания"""
     user_id = update.effective_user.id
 
-    # Проверяем, передано ли имя
     if not context.args:
         await update.message.reply_text(
             "❌ Пожалуйста, укажи ФИО преподавателя.\n"
-            "Пример: /set_teacher Хаджинова Н.В."
+            "Пример: /set_teacher Иванов А.А."
         )
         return
 
     teacher_name = " ".join(context.args)
 
-    # Показываем статус загрузки
     status_msg = await update.message.reply_text("⏳ Поиск расписания...")
 
-    # Проверяем, есть ли такой преподаватель в системе
     schedule = get_schedule_for_teacher(teacher_name)
     if not schedule:
         await status_msg.edit_text(
@@ -423,16 +371,13 @@ async def set_teacher(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Сохраняем преподавателя в базу
     db.add_user(user_id, update.effective_user.username,
                 update.effective_user.first_name,
                 update.effective_user.last_name,
                 teacher_name)
 
-    # Сохраняем кеш расписания для отслеживания изменений
     db.save_schedule_cache(user_id, teacher_name, schedule)
 
-    # Группируем по дням
     grouped = get_lessons_by_date(schedule)
 
     await status_msg.edit_text(
@@ -457,7 +402,6 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     teacher_name = db_user[4]
 
-    # Показываем статус загрузки
     status_msg = await update.message.reply_text("⏳ Загрузка расписания...")
 
     schedule = get_schedule_for_teacher(teacher_name)
@@ -469,10 +413,8 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     today_str = datetime.now().strftime("%Y-%m-%d")
     formatted = format_lessons_for_display(schedule, today_str)
 
-    # Сохраняем кеш для отслеживания изменений
     db.save_schedule_cache(user_id, teacher_name, schedule)
 
-    # Создаем клавиатуру
     keyboard = [
         [InlineKeyboardButton("📅 Завтра", callback_data="tomorrow")],
         [InlineKeyboardButton("📅 Неделя", callback_data="week")]
@@ -499,7 +441,6 @@ async def tomorrow(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     teacher_name = db_user[4]
 
-    # Показываем статус загрузки
     status_msg = await update.message.reply_text("⏳ Загрузка расписания...")
 
     schedule = get_schedule_for_teacher(teacher_name)
@@ -511,7 +452,6 @@ async def tomorrow(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tomorrow_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
     formatted = format_lessons_for_display(schedule, tomorrow_date)
 
-    # Создаем клавиатуру
     keyboard = [
         [InlineKeyboardButton("📅 Сегодня", callback_data="today")],
         [InlineKeyboardButton("📅 Неделя", callback_data="week")]
@@ -538,7 +478,6 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     teacher_name = db_user[4]
 
-    # Показываем статус загрузки
     status_msg = await update.message.reply_text("⏳ Загрузка расписания...")
 
     schedule = get_schedule_for_teacher(teacher_name)
@@ -549,14 +488,12 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     formatted = format_lessons_for_display(schedule)
 
-    # Создаем клавиатуру
     keyboard = [
         [InlineKeyboardButton("📅 Сегодня", callback_data="today")],
         [InlineKeyboardButton("📅 Завтра", callback_data="tomorrow")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # Если слишком много занятий, разбиваем на части
     if len(formatted) > 4000:
         parts = []
         current_part = "📚 Расписание на неделю:\n\n"
@@ -568,10 +505,8 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 current_part += line + '\n'
         parts.append(current_part)
 
-        # Отправляем первую часть с клавиатурой
         await status_msg.edit_text(parts[0], parse_mode="Markdown", reply_markup=reply_markup)
 
-        # Отправляем остальные части без клавиатуры
         for part in parts[1:]:
             await update.message.reply_text(part, parse_mode="Markdown")
     else:
@@ -752,24 +687,19 @@ async def check_changes(context: ContextTypes.DEFAULT_TYPE):
     users = db.get_all_users_with_teacher()
     for user_id, teacher_name in users:
         try:
-            # Получаем текущее расписание (уже отфильтрованное)
             current_schedule = get_schedule_for_teacher(teacher_name)
             if not current_schedule:
                 continue
 
-            # Получаем сохраненное расписание
             cached_schedule, _ = db.get_schedule_cache(user_id)
 
             if cached_schedule:
-                # Сравниваем UUID занятий
                 current_uuids = {lesson['uuid'] for lesson in current_schedule}
                 cached_uuids = {lesson['uuid'] for lesson in cached_schedule}
 
-                # Находим изменения
                 new_uuids = current_uuids - cached_uuids
                 removed_uuids = cached_uuids - current_uuids
 
-                # Сохраняем изменения в базу
                 for uuid in new_uuids:
                     lesson = next(l for l in current_schedule if l['uuid'] == uuid)
                     db.add_change(user_id, 'added', uuid, lesson)
@@ -778,11 +708,9 @@ async def check_changes(context: ContextTypes.DEFAULT_TYPE):
                     lesson = next(l for l in cached_schedule if l['uuid'] == uuid)
                     db.add_change(user_id, 'removed', uuid, lesson)
 
-                # Если есть изменения, отправляем уведомление
                 if new_uuids or removed_uuids:
                     await notify_user(context.bot, user_id)
 
-            # Обновляем кеш
             db.save_schedule_cache(user_id, teacher_name, current_schedule)
 
         except Exception as e:
@@ -822,21 +750,15 @@ async def notify_user(bot, user_id):
 
 def main():
     """Основная функция запуска бота"""
-    # Токен бота
     token = os.getenv('TELEGRAM_BOT_TOKEN')
 
     if not token:
-        print("❌ Ошибка: TELEGRAM_BOT_TOKEN не найден")
+        print("❌ Ошибка: TELEGRAM_BOT_TOKEN не найден в .env файле")
+        print("Создайте файл .env и добавьте: TELEGRAM_BOT_TOKEN=ваш_токен")
         return
 
     # Создаем папку для данных
     os.makedirs("data", exist_ok=True)
-
-    # ЗАПУСКАЕМ FLASK В ОТДЕЛЬНОМ ПРОЦЕССЕ (не в потоке)
-    import multiprocessing
-    flask_process = multiprocessing.Process(target=run_flask, daemon=True)
-    flask_process.start()
-    logger.info("🌐 Flask сервер запущен для keep_alive в отдельном процессе")
 
     # Создаем приложение Telegram бота
     application = Application.builder().token(token).build()
@@ -874,7 +796,7 @@ def main():
     else:
         logger.warning("⚠️ JobQueue не доступен. Установите: pip install 'python-telegram-bot[job-queue]'")
 
-    # ЗАПУСКАЕМ БОТА
+    # Запуск бота
     logger.info("🚀 Бот запущен и готов к работе!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
