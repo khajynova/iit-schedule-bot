@@ -303,12 +303,12 @@ async def get_schedule_and_check(user_id, query=None):
     schedule = get_schedule_for_teacher(teacher_name)
     return schedule, teacher_name
 
-def send_schedule_result(query, context, schedule, title, reply_markup=None):
+async def send_schedule_result(query, context, schedule, title, reply_markup=None):
     """Отправляет расписание с обработкой длинных сообщений"""
     formatted = format_lessons_for_display(schedule)
 
     if not formatted or formatted == "📭 Занятий не найдено.":
-        query.edit_message_text("📭 Занятий не найдено.", reply_markup=reply_markup)
+        await query.edit_message_text("📭 Занятий не найдено.", reply_markup=reply_markup)
         return
 
     if len(formatted) > 4000:
@@ -322,12 +322,12 @@ def send_schedule_result(query, context, schedule, title, reply_markup=None):
                 current_part += line + '\n'
         parts.append(current_part)
 
-        query.edit_message_text(parts[0], parse_mode="Markdown", reply_markup=reply_markup)
+        await query.edit_message_text(parts[0], parse_mode="Markdown", reply_markup=reply_markup)
 
         for part in parts[1:]:
-            context.bot.send_message(chat_id=query.from_user.id, text=part, parse_mode="Markdown")
+            await context.bot.send_message(chat_id=query.from_user.id, text=part, parse_mode="Markdown")
     else:
-        query.edit_message_text(f"{title}\n\n{formatted}", parse_mode="Markdown", reply_markup=reply_markup)
+        await query.edit_message_text(f"{title}\n\n{formatted}", parse_mode="Markdown", reply_markup=reply_markup)
 
 async def today_callback(query, context):
     """Показать расписание на сегодня"""
