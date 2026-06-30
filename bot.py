@@ -110,11 +110,92 @@ def get_schedule_for_teacher(teacher_name, page_limit=10, date_filter=None):
         logger.error(f"Ошибка запроса к API: {e}")
         return []
 
-def get_cached_schedule(teacher_name, date_filter=None):
+def get_schedule_for_group(group_name, page_limit=10, date_filter=None):
+    """
+    Получает расписание для группы.
+    group_name - название группы (например, "60131")
+    """
+    url = "https://iit.bsuir.by/api/v1/content/schedule/"
+
+    # Если фильтр по дате - загружаем только одну страницу (БЫСТРО)
+    if date_filter:
+        params = {
+            "page": 1,
+            "group": group_name
+        }
+        try:
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            results = data.get("results", [])
+            # Фильтруем по дате и группе
+            filtered = [l for l in results if l.get("date") == date_filter and group_name in l.get("info", "")]
+            return filtered
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Ошибка запроса к API: {e}")
+            return []
+
+    # Иначе загружаем все страницы (для недели/месяца)
+    all_results = []
+    page = 1
+    pages_loaded = 0
+
+    try:
+        while pages_loaded < page_limit:
+            params = {
+                "page": page,
+                "group": group_name
+            }
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            results = data.get("results", [])
+            if not results:
+                break
+
+            all_results.extend(results)
+            pages_loaded += 1
+
+            if not data.get("next"):
+                break
+
+            page += 1
+
+        # Фильтруем занятия - оставляем только те, где есть группа
+        filtered_results = []
+        for lesson in all_results:
+            info = lesson.get("info", "")
+            if group_name in info:
+                filtered_results.append(lesson)
+
+        logger.info(f"Найдено {len(filtered_results)} занятий для группы {group_name} (из {len(all_results)} всего)")
+        return filtered_results
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Ошибка запроса к API: {e}")
+        return []
+
+def get_schedule_for_search(search_query, page_limit=10, date_filter=None):
+    """
+    Универсальная функция - определяет, что искать автоматически
+    Если запрос состоит только из цифр - это группа, иначе преподаватель
+    """
+    # Очищаем запрос от лишних пробелов
+    clean_query = search_query.strip()
+    # Проверяем, состоит ли запрос только из цифр (с возможными пробелами)
+    is_group = clean_query.replace(" ", "").isdigit()
+
+    if is_group:
+        return get_schedule_for_group(clean_query, page_limit, date_filter)
+    else:
+        return get_schedule_for_teacher(clean_query, page_limit, date_filter)
+
+def get_cached_schedule(search_query, date_filter=None):
     """
     Получает расписание с кешированием для ускорения
     """
-    cache_key = f"{teacher_name}_{date_filter if date_filter else 'all'}"
+    cache_key = f"{search_query}_{date_filter if date_filter else 'all'}"
 
     # Проверяем кеш
     if cache_key in schedule_cache:
@@ -124,7 +205,7 @@ def get_cached_schedule(teacher_name, date_filter=None):
             return cache_data
 
     # Загружаем свежие данные
-    lessons = get_schedule_for_teacher(teacher_name, date_filter=date_filter)
+    lessons = get_schedule_for_search(search_query, date_filter=date_filter)
 
     # Сохраняем в кеш
     schedule_cache[cache_key] = (lessons, datetime.now())
@@ -224,7 +305,17 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id=
         user_id = update.effective_user.id
 
     db_user = db.get_user(user_id)
-    teacher = db_user[4] if db_user and db_user[4] else "❌ не установлен"
+    search_query = db_user[4] if db_user and db_user[4] else "❌ не установлен"
+
+    # Определяем тип запроса для отображения
+    if search_query != "❌ не установлен":
+        clean_query = search_query.strip()
+        if clean_query.replace(" ", "").isdigit():
+            display_text = f"Группа: {search_query}"
+        else:
+            display_text = f"Преподаватель: {search_query}"
+    else:
+        display_text = "❌ не установлен"
 
     keyboard = [
         [InlineKeyboardButton("📚 Расписание", callback_data="schedule_menu")],
@@ -234,7 +325,7 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id=
 
     text = (
         f"👋 Главное меню\n\n"
-        f"👨‍🏫 Преподаватель: *{teacher}*\n\n"
+        f"🔍 {display_text}\n\n"
         "Выбери действие:"
     )
 
@@ -263,14 +354,21 @@ async def schedule_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not db_user or not db_user[4]:
         keyboard = [[InlineKeyboardButton("🔙 В меню", callback_data="back_to_main")]]
         await query.edit_message_text(
-            "❌ Сначала установи преподавателя!\n\n"
+            "❌ Сначала установи преподавателя или группу!\n\n"
             "Используй команду:\n"
-            "/set_teacher Фамилия И.О.",
+            "/set_teacher Фамилия И.О. или номер группы",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
 
-    teacher = db_user[4]
+    search_query = db_user[4]
+
+    # Определяем тип запроса для отображения
+    clean_query = search_query.strip()
+    if clean_query.replace(" ", "").isdigit():
+        display_text = f"Группа: {search_query}"
+    else:
+        display_text = f"Преподаватель: {search_query}"
 
     keyboard = [
         [InlineKeyboardButton("📅 Сегодня", callback_data="today")],
@@ -284,7 +382,7 @@ async def schedule_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.edit_message_text(
         f"📚 *Выбери период*\n\n"
-        f"👨‍🏫 Преподаватель: *{teacher}*",
+        f"🔍 {display_text}",
         parse_mode="Markdown",
         reply_markup=reply_markup
     )
@@ -306,20 +404,30 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    teacher = db_user[4] if db_user[4] else "не установлен"
+    search_query = db_user[4] if db_user[4] else "не установлен"
     notifications = "🔔 Включены" if db_user[5] == 1 else "🔕 Выключены"
+
+    # Определяем тип запроса для отображения
+    if search_query != "не установлен":
+        clean_query = search_query.strip()
+        if clean_query.replace(" ", "").isdigit():
+            display_text = f"Группа: {search_query}"
+        else:
+            display_text = f"Преподаватель: {search_query}"
+    else:
+        display_text = "не установлен"
 
     keyboard = [
         [InlineKeyboardButton("🔔 Включить уведомления", callback_data="notifications_on")],
         [InlineKeyboardButton("🔕 Выключить уведомления", callback_data="notifications_off")],
-        [InlineKeyboardButton("❌ Удалить преподавателя", callback_data="remove_teacher")],
+        [InlineKeyboardButton("❌ Удалить преподавателя/группу", callback_data="remove_teacher")],
         [InlineKeyboardButton("🔙 В меню", callback_data="back_to_main")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await query.edit_message_text(
         f"⚙️ *Настройки*\n\n"
-        f"👨‍🏫 Преподаватель: *{teacher}*\n"
+        f"🔍 {display_text}\n"
         f"🔔 Уведомления: *{notifications}*\n\n"
         "Выбери действие:",
         parse_mode="Markdown",
@@ -338,10 +446,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Новый пользователь
         welcome_text = (
             f"👋 Привет, {user.first_name}!\n\n"
-            "Я бот для отслеживания расписания преподавателей ИИТ БГУИР.\n\n"
-            "📌 Сначала установи преподавателя командой:\n"
-            "/set_teacher Фамилия И.О.\n\n"
-            "Пример: /set_teacher Хаджинова Н.В.\n\n"
+            "Я бот для отслеживания расписания ИИТ БГУИР.\n\n"
+            "📌 Установи преподавателя или группу командой:\n"
+            "/set_teacher Фамилия И.О. или номер группы\n\n"
+            "Примеры:\n"
+            "/set_teacher Хаджинова Н.В.\n"
+            "/set_teacher 60131\n\n"
             "🔔 После установки я буду отслеживать изменения в расписании."
         )
         await update.message.reply_text(welcome_text)
@@ -350,41 +460,53 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Пользователь уже есть - показываем главное меню
         await main_menu(update, context)
 
-# ============ УСТАНОВКА ПРЕПОДАВАТЕЛЯ ============
+# ============ УСТАНОВКА ПРЕПОДАВАТЕЛЯ ИЛИ ГРУППЫ ============
 async def set_teacher(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Установка преподавателя для отслеживания"""
+    """Установка преподавателя или группы для отслеживания"""
     user_id = update.effective_user.id
 
     if not context.args:
         await update.message.reply_text(
-            "❌ Пожалуйста, укажи ФИО преподавателя.\n"
-            "Пример: /set_teacher Хаджинова Н.В."
+            "❌ Пожалуйста, укажи ФИО преподавателя или номер группы.\n"
+            "Примеры:\n"
+            "/set_teacher Хаджинова Н.В.\n"
+            "/set_teacher 60131"
         )
         return
 
-    teacher_name = " ".join(context.args)
+    search_query = " ".join(context.args).strip()
+
+    # Определяем, что ищем - группу или преподавателя
+    # Если запрос состоит только из цифр (с возможными пробелами) - это группа
+    is_group = search_query.replace(" ", "").isdigit()
 
     status_msg = await update.message.reply_text("⏳ Поиск расписания...")
 
-    schedule = get_schedule_for_teacher(teacher_name, page_limit=3)
+    if is_group:
+        schedule = get_schedule_for_group(search_query, page_limit=3)
+        search_type = "группы"
+    else:
+        schedule = get_schedule_for_teacher(search_query, page_limit=3)
+        search_type = "преподавателя"
+
     if not schedule:
         await status_msg.edit_text(
-            f"❌ Преподаватель '{teacher_name}' не найден.\n"
-            "Проверь правильность написания ФИО."
+            f"❌ {search_type.capitalize()} '{search_query}' не найден(а).\n"
+            "Проверь правильность написания."
         )
         return
 
     db.add_user(user_id, update.effective_user.username,
                 update.effective_user.first_name,
                 update.effective_user.last_name,
-                teacher_name)
+                search_query)
 
-    db.save_schedule_cache(user_id, teacher_name, schedule)
+    db.save_schedule_cache(user_id, search_query, schedule)
 
     grouped = get_lessons_by_date(schedule)
 
     await status_msg.edit_text(
-        f"✅ Преподаватель *{teacher_name}* установлен!\n\n"
+        f"✅ {search_type.capitalize()} *{search_query}* установлен(а)!\n\n"
         f"📊 Найдено *{len(schedule)}* занятий в расписании.\n"
         f"📅 Всего дней: *{len(grouped)}*\n\n"
         "Теперь я буду отслеживать изменения.",
@@ -458,7 +580,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.add_user(user_id, query.from_user.username,
                     query.from_user.first_name,
                     query.from_user.last_name, "")
-        await query.edit_message_text("✅ Преподаватель удален!")
+        await query.edit_message_text("✅ Преподаватель/группа удалены!")
         await asyncio.sleep(0.5)
         await main_menu(update, context, query.from_user.id)
         return
@@ -470,15 +592,15 @@ async def today_callback(query, context):
     db_user = db.get_user(user_id)
 
     if not db_user or not db_user[4]:
-        await query.edit_message_text("❌ Сначала установи преподавателя.")
+        await query.edit_message_text("❌ Сначала установи преподавателя или группу.")
         return
 
-    teacher_name = db_user[4]
+    search_query = db_user[4]
 
     await query.edit_message_text("⏳ Загрузка...")
 
     today_str = datetime.now().strftime("%Y-%m-%d")
-    schedule = get_cached_schedule(teacher_name, date_filter=today_str)
+    schedule = get_cached_schedule(search_query, date_filter=today_str)
 
     keyboard = [
         [InlineKeyboardButton("📅 Завтра", callback_data="tomorrow")],
@@ -508,15 +630,15 @@ async def tomorrow_callback(query, context):
     db_user = db.get_user(user_id)
 
     if not db_user or not db_user[4]:
-        await query.edit_message_text("❌ Сначала установи преподавателя.")
+        await query.edit_message_text("❌ Сначала установи преподавателя или группу.")
         return
 
-    teacher_name = db_user[4]
+    search_query = db_user[4]
 
     await query.edit_message_text("⏳ Загрузка...")
 
     tomorrow_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-    schedule = get_cached_schedule(teacher_name, date_filter=tomorrow_date)
+    schedule = get_cached_schedule(search_query, date_filter=tomorrow_date)
 
     keyboard = [
         [InlineKeyboardButton("📅 Сегодня", callback_data="today")],
@@ -546,14 +668,14 @@ async def week_callback(query, context):
     db_user = db.get_user(user_id)
 
     if not db_user or not db_user[4]:
-        await query.edit_message_text("❌ Сначала установи преподавателя.")
+        await query.edit_message_text("❌ Сначала установи преподавателя или группу.")
         return
 
-    teacher_name = db_user[4]
+    search_query = db_user[4]
 
     await query.edit_message_text("⏳ Загрузка...")
 
-    schedule = get_schedule_for_teacher(teacher_name, page_limit=5)
+    schedule = get_schedule_for_search(search_query, page_limit=5)
 
     if not schedule:
         await query.edit_message_text("❌ Не удалось получить расписание.")
@@ -598,14 +720,14 @@ async def month_callback(query, context):
     db_user = db.get_user(user_id)
 
     if not db_user or not db_user[4]:
-        await query.edit_message_text("❌ Сначала установи преподавателя.")
+        await query.edit_message_text("❌ Сначала установи преподавателя или группу.")
         return
 
-    teacher_name = db_user[4]
+    search_query = db_user[4]
 
     await query.edit_message_text("⏳ Загрузка...")
 
-    schedule = get_schedule_for_teacher(teacher_name, page_limit=10)
+    schedule = get_schedule_for_search(search_query, page_limit=10)
 
     if not schedule:
         await query.edit_message_text("❌ Не удалось получить расписание.")
@@ -651,14 +773,14 @@ async def all_schedule_callback(query, context):
     db_user = db.get_user(user_id)
 
     if not db_user or not db_user[4]:
-        await query.edit_message_text("❌ Сначала установи преподавателя.")
+        await query.edit_message_text("❌ Сначала установи преподавателя или группу.")
         return
 
-    teacher_name = db_user[4]
+    search_query = db_user[4]
 
     await query.edit_message_text("⏳ Загрузка...")
 
-    schedule = get_schedule_for_teacher(teacher_name, page_limit=10)
+    schedule = get_schedule_for_search(search_query, page_limit=10)
 
     if not schedule:
         await query.edit_message_text("❌ Не удалось получить расписание.")
@@ -701,7 +823,7 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     db_user = db.get_user(user_id)
     if not db_user or not db_user[4]:
-        await update.message.reply_text("❌ Сначала установи преподавателя.")
+        await update.message.reply_text("❌ Сначала установи преподавателя или группу.")
         return
 
     class MockQuery:
@@ -720,7 +842,7 @@ async def tomorrow(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     db_user = db.get_user(user_id)
     if not db_user or not db_user[4]:
-        await update.message.reply_text("❌ Сначала установи преподавателя.")
+        await update.message.reply_text("❌ Сначала установи преподавателя или группу.")
         return
 
     class MockQuery:
@@ -739,7 +861,7 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     db_user = db.get_user(user_id)
     if not db_user or not db_user[4]:
-        await update.message.reply_text("❌ Сначала установи преподавателя.")
+        await update.message.reply_text("❌ Сначала установи преподавателя или группу.")
         return
 
     class MockQuery:
@@ -760,7 +882,7 @@ async def remove_teacher(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 update.effective_user.first_name,
                 update.effective_user.last_name, "")
     await update.message.reply_text(
-        "✅ Преподаватель удален.\n"
+        "✅ Преподаватель/группа удалены.\n"
         "Используй /set_teacher чтобы установить нового."
     )
 
@@ -789,12 +911,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🤖 *Помощь по боту*\n\n"
         "📌 *Основные команды:*\n"
         "/start - Главное меню\n"
-        "/set_teacher ФИО - Установить преподавателя\n"
+        "/set_teacher ФИО или группа - Установить преподавателя или группу\n"
         "/today - Расписание на сегодня\n"
         "/tomorrow - Расписание на завтра\n"
         "/week - Расписание на неделю\n"
         "/settings - Настройки\n"
-        "/remove_teacher - Удалить преподавателя\n"
+        "/remove_teacher - Удалить преподавателя/группу\n"
         "/help - Эта справка\n\n"
         "📱 Используй кнопки для быстрого доступа."
     )
@@ -806,9 +928,9 @@ async def check_changes(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Проверка изменений в расписании...")
 
     users = db.get_all_users_with_teacher()
-    for user_id, teacher_name in users:
+    for user_id, search_query in users:
         try:
-            current_schedule = get_schedule_for_teacher(teacher_name, page_limit=5)
+            current_schedule = get_schedule_for_search(search_query, page_limit=5)
             if not current_schedule:
                 continue
 
@@ -832,7 +954,7 @@ async def check_changes(context: ContextTypes.DEFAULT_TYPE):
                 if new_uuids or removed_uuids:
                     await notify_user(context.bot, user_id)
 
-            db.save_schedule_cache(user_id, teacher_name, current_schedule)
+            db.save_schedule_cache(user_id, search_query, current_schedule)
 
         except Exception as e:
             logger.error(f"Ошибка при проверке для пользователя {user_id}: {e}")
