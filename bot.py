@@ -50,7 +50,7 @@ def get_schedule_for_teacher(teacher_name, page_limit=10, date_filter=None):
     date_filter - если указана дата, загружаем только одну страницу
     """
     url = "https://iit.bsuir.by/api/v1/content/schedule/"
-
+    
     # Если фильтр по дате - загружаем только одну страницу (БЫСТРО)
     if date_filter:
         params = {
@@ -68,7 +68,7 @@ def get_schedule_for_teacher(teacher_name, page_limit=10, date_filter=None):
         except requests.exceptions.RequestException as e:
             logger.error(f"Ошибка запроса к API: {e}")
             return []
-
+    
     # Иначе загружаем все страницы (для недели/месяца)
     all_results = []
     page = 1
@@ -115,20 +115,20 @@ def get_cached_schedule(teacher_name, date_filter=None):
     Получает расписание с кешированием для ускорения
     """
     cache_key = f"{teacher_name}_{date_filter if date_filter else 'all'}"
-
+    
     # Проверяем кеш
     if cache_key in schedule_cache:
         cache_data, timestamp = schedule_cache[cache_key]
         if (datetime.now() - timestamp).seconds < CACHE_DURATION:
             logger.info(f"Используем кеш для {cache_key}")
             return cache_data
-
+    
     # Загружаем свежие данные
     lessons = get_schedule_for_teacher(teacher_name, date_filter=date_filter)
-
+    
     # Сохраняем в кеш
     schedule_cache[cache_key] = (lessons, datetime.now())
-
+    
     return lessons
 
 def format_lessons_for_display(lessons, date_filter=None):
@@ -178,12 +178,12 @@ def filter_lessons_by_week(lessons, target_date=None):
     """Фильтрует занятия по текущей неделе"""
     if target_date is None:
         target_date = datetime.now()
-
+    
     start_of_week = target_date - timedelta(days=target_date.weekday())
     start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
     end_of_week = start_of_week + timedelta(days=6)
     end_of_week = end_of_week.replace(hour=23, minute=59, second=59, microsecond=999999)
-
+    
     filtered = []
     for lesson in lessons:
         date_str = lesson.get('date', '')
@@ -191,14 +191,14 @@ def filter_lessons_by_week(lessons, target_date=None):
             lesson_date = datetime.strptime(date_str, "%Y-%m-%d")
             if start_of_week <= lesson_date <= end_of_week:
                 filtered.append(lesson)
-
+    
     return filtered
 
 def filter_lessons_by_month(lessons, target_date=None):
     """Фильтрует занятия по текущему месяцу"""
     if target_date is None:
         target_date = datetime.now()
-
+    
     filtered = []
     for lesson in lessons:
         date_str = lesson.get('date', '')
@@ -206,7 +206,7 @@ def filter_lessons_by_month(lessons, target_date=None):
             lesson_date = datetime.strptime(date_str, "%Y-%m-%d")
             if lesson_date.month == target_date.month and lesson_date.year == target_date.year:
                 filtered.append(lesson)
-
+    
     return filtered
 
 async def reset_webhook(application):
@@ -222,22 +222,22 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id=
     """Главное меню с двумя кнопками"""
     if user_id is None:
         user_id = update.effective_user.id
-
+    
     db_user = db.get_user(user_id)
     teacher = db_user[4] if db_user and db_user[4] else "❌ не установлен"
-
+    
     keyboard = [
         [InlineKeyboardButton("📚 Расписание", callback_data="schedule_menu")],
         [InlineKeyboardButton("⚙️ Настройки", callback_data="settings_menu")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
+    
     text = (
         f"👋 Главное меню\n\n"
         f"👨‍🏫 Преподаватель: *{teacher}*\n\n"
         "Выбери действие:"
     )
-
+    
     if update.callback_query:
         await update.callback_query.edit_message_text(
             text,
@@ -256,10 +256,10 @@ async def schedule_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Меню с выбором периода расписания"""
     query = update.callback_query
     await query.answer()
-
+    
     user_id = query.from_user.id
     db_user = db.get_user(user_id)
-
+    
     if not db_user or not db_user[4]:
         keyboard = [[InlineKeyboardButton("🔙 В меню", callback_data="back_to_main")]]
         await query.edit_message_text(
@@ -269,9 +269,9 @@ async def schedule_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
-
+    
     teacher = db_user[4]
-
+    
     keyboard = [
         [InlineKeyboardButton("📅 Сегодня", callback_data="today")],
         [InlineKeyboardButton("📅 Завтра", callback_data="tomorrow")],
@@ -281,7 +281,7 @@ async def schedule_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔙 В меню", callback_data="back_to_main")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
+    
     await query.edit_message_text(
         f"📚 *Выбери период*\n\n"
         f"👨‍🏫 Преподаватель: *{teacher}*",
@@ -294,10 +294,10 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Меню настроек"""
     query = update.callback_query
     await query.answer()
-
+    
     user_id = query.from_user.id
     db_user = db.get_user(user_id)
-
+    
     if not db_user:
         keyboard = [[InlineKeyboardButton("🔙 В меню", callback_data="back_to_main")]]
         await query.edit_message_text(
@@ -305,10 +305,10 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
-
+    
     teacher = db_user[4] if db_user[4] else "не установлен"
     notifications = "🔔 Включены" if db_user[5] == 1 else "🔕 Выключены"
-
+    
     keyboard = [
         [InlineKeyboardButton("🔔 Включить уведомления", callback_data="notifications_on")],
         [InlineKeyboardButton("🔕 Выключить уведомления", callback_data="notifications_off")],
@@ -316,7 +316,7 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔙 В меню", callback_data="back_to_main")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
+    
     await query.edit_message_text(
         f"⚙️ *Настройки*\n\n"
         f"👨‍🏫 Преподаватель: *{teacher}*\n"
@@ -333,7 +333,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
 
     db_user = db.get_user(user_id)
-
+    
     if not db_user:
         # Новый пользователь
         welcome_text = (
@@ -390,7 +390,7 @@ async def set_teacher(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Теперь я буду отслеживать изменения.",
         parse_mode="Markdown"
     )
-
+    
     # Показываем главное меню
     await main_menu(update, context)
 
@@ -401,63 +401,65 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     data = query.data
-
+    
     # Навигация по меню
     if data == "schedule_menu":
         await schedule_menu(update, context)
         return
-
+    
     if data == "settings_menu":
         await settings_menu(update, context)
         return
-
+    
     if data == "back_to_main":
         await main_menu(update, context, query.from_user.id)
         return
-
+    
     # Расписание
     if data == "today":
         await today_callback(query, context)
         return
-
+    
     if data == "tomorrow":
         await tomorrow_callback(query, context)
         return
-
+    
     if data == "week":
         await week_callback(query, context)
         return
-
+    
     if data == "month":
         await month_callback(query, context)
         return
-
+    
     if data == "all_schedule":
         await all_schedule_callback(query, context)
         return
-
+    
     # Настройки
     if data == "notifications_on":
         user_id = query.from_user.id
         db.toggle_notifications(user_id, True)
         await query.edit_message_text("🔔 Уведомления включены!")
+        await asyncio.sleep(0.5)
         await settings_menu(update, context)
         return
-
+    
     if data == "notifications_off":
         user_id = query.from_user.id
         db.toggle_notifications(user_id, False)
         await query.edit_message_text("🔕 Уведомления выключены!")
+        await asyncio.sleep(0.5)
         await settings_menu(update, context)
         return
-
+    
     if data == "remove_teacher":
         user_id = query.from_user.id
         db.add_user(user_id, query.from_user.username,
                     query.from_user.first_name,
                     query.from_user.last_name, "")
         await query.edit_message_text("✅ Преподаватель удален!")
-        # Возвращаем в главное меню, но показываем, что преподаватель не установлен
+        await asyncio.sleep(0.5)
         await main_menu(update, context, query.from_user.id)
         return
 
@@ -483,9 +485,9 @@ async def today_callback(query, context):
         [InlineKeyboardButton("🔙 В расписание", callback_data="schedule_menu")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
+    
     formatted = format_lessons_for_display(schedule, today_str)
-
+    
     if not schedule or formatted == "📭 Занятий не найдено.":
         await query.edit_message_text(
             f"📭 На *сегодня* ({datetime.now().strftime('%d.%m.%Y')}) занятий нет.",
@@ -493,7 +495,7 @@ async def today_callback(query, context):
             reply_markup=reply_markup
         )
         return
-
+    
     await query.edit_message_text(
         f"📚 *Сегодня* ({datetime.now().strftime('%d.%m.%Y')})\n\n{formatted}",
         parse_mode="Markdown",
@@ -521,9 +523,9 @@ async def tomorrow_callback(query, context):
         [InlineKeyboardButton("🔙 В расписание", callback_data="schedule_menu")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
+    
     formatted = format_lessons_for_display(schedule, tomorrow_date)
-
+    
     if not schedule or formatted == "📭 Занятий не найдено.":
         await query.edit_message_text(
             f"📭 На *завтра* ({tomorrow_date}) занятий нет.",
@@ -531,7 +533,7 @@ async def tomorrow_callback(query, context):
             reply_markup=reply_markup
         )
         return
-
+    
     await query.edit_message_text(
         f"📚 *Завтра* ({tomorrow_date})\n\n{formatted}",
         parse_mode="Markdown",
@@ -552,7 +554,7 @@ async def week_callback(query, context):
     await query.edit_message_text("⏳ Загрузка...")
 
     schedule = get_schedule_for_teacher(teacher_name, page_limit=5)
-
+    
     if not schedule:
         await query.edit_message_text("❌ Не удалось получить расписание.")
         return
@@ -604,7 +606,7 @@ async def month_callback(query, context):
     await query.edit_message_text("⏳ Загрузка...")
 
     schedule = get_schedule_for_teacher(teacher_name, page_limit=10)
-
+    
     if not schedule:
         await query.edit_message_text("❌ Не удалось получить расписание.")
         return
@@ -657,7 +659,7 @@ async def all_schedule_callback(query, context):
     await query.edit_message_text("⏳ Загрузка...")
 
     schedule = get_schedule_for_teacher(teacher_name, page_limit=10)
-
+    
     if not schedule:
         await query.edit_message_text("❌ Не удалось получить расписание.")
         return
@@ -701,7 +703,7 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not db_user or not db_user[4]:
         await update.message.reply_text("❌ Сначала установи преподавателя.")
         return
-
+    
     # Создаем callback_query и вызываем today_callback
     class MockQuery:
         def __init__(self, user_id):
@@ -711,7 +713,7 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(*args, **kwargs)
         async def answer(self):
             pass
-
+    
     await today_callback(MockQuery(user_id), context)
 
 async def tomorrow(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -721,7 +723,7 @@ async def tomorrow(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not db_user or not db_user[4]:
         await update.message.reply_text("❌ Сначала установи преподавателя.")
         return
-
+    
     class MockQuery:
         def __init__(self, user_id):
             self.from_user = type('obj', (object,), {'id': user_id})
@@ -730,7 +732,7 @@ async def tomorrow(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(*args, **kwargs)
         async def answer(self):
             pass
-
+    
     await tomorrow_callback(MockQuery(user_id), context)
 
 async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -740,7 +742,7 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not db_user or not db_user[4]:
         await update.message.reply_text("❌ Сначала установи преподавателя.")
         return
-
+    
     class MockQuery:
         def __init__(self, user_id):
             self.from_user = type('obj', (object,), {'id': user_id})
@@ -749,7 +751,7 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(*args, **kwargs)
         async def answer(self):
             pass
-
+    
     await week_callback(MockQuery(user_id), context)
 
 async def remove_teacher(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -770,7 +772,7 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not db_user:
         await update.message.reply_text("❌ Сначала используй /start")
         return
-
+    
     class MockQuery:
         def __init__(self, user_id):
             self.from_user = type('obj', (object,), {'id': user_id})
@@ -779,7 +781,7 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(*args, **kwargs)
         async def answer(self):
             pass
-
+    
     await settings_menu(MockQuery(user_id), context)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -881,6 +883,7 @@ def main():
 
     application = Application.builder().token(token).build()
 
+    # Удаляем вебхук при запуске
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -903,6 +906,7 @@ def main():
     # Регистрируем обработчики кнопок
     application.add_handler(CallbackQueryHandler(button_callback, pattern="^(schedule_menu|settings_menu|back_to_main|today|tomorrow|week|month|all_schedule|notifications_on|notifications_off|remove_teacher)$"))
 
+    # Настройка фоновой задачи для проверки изменений (каждые 5 минут)
     job_queue = application.job_queue
     if job_queue:
         job_queue.run_repeating(check_changes, interval=300, first=10)
@@ -910,16 +914,8 @@ def main():
 
     logger.info("🚀 Бот запущен и готов к работе!")
 
-    try:
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
-    except RuntimeError as e:
-        if "Event loop is closed" in str(e):
-            logger.warning("Перезапуск с новым event loop...")
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            application.run_polling(allowed_updates=Update.ALL_TYPES)
-        else:
-            raise
+    # Запускаем бота
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()
