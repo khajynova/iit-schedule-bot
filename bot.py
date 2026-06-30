@@ -40,13 +40,36 @@ DAY_NAMES = {
     'sunday': 'Воскресенье'
 }
 
-# Функция для получения расписания
-def get_schedule_for_teacher(teacher_name, page_limit=10):
+# Кеш для расписания
+schedule_cache = {}
+CACHE_DURATION = 3600  # 1 час
+
+def get_schedule_for_teacher(teacher_name, page_limit=10, date_filter=None):
     """
     Получает расписание для преподавателя.
-    page_limit - максимальное количество страниц для загрузки (по умолчанию 10)
+    date_filter - если указана дата, загружаем только одну страницу
     """
     url = "https://iit.bsuir.by/api/v1/content/schedule/"
+
+    # Если фильтр по дате - загружаем только одну страницу (БЫСТРО)
+    if date_filter:
+        params = {
+            "page": 1,
+            "teacher": teacher_name
+        }
+        try:
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            results = data.get("results", [])
+            # Фильтруем по дате и ФИО
+            filtered = [l for l in results if l.get("date") == date_filter and teacher_name.lower() in l.get("info", "").lower()]
+            return filtered
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Ошибка запроса к API: {e}")
+            return []
+
+    # Иначе загружаем все страницы (для недели/месяца)
     all_results = []
     page = 1
     pages_loaded = 0
@@ -86,6 +109,27 @@ def get_schedule_for_teacher(teacher_name, page_limit=10):
     except requests.exceptions.RequestException as e:
         logger.error(f"Ошибка запроса к API: {e}")
         return []
+
+def get_cached_schedule(teacher_name, date_filter=None):
+    """
+    Получает расписание с кешированием для ускорения
+    """
+    cache_key = f"{teacher_name}_{date_filter if date_filter else 'all'}"
+
+    # Проверяем кеш
+    if cache_key in schedule_cache:
+        cache_data, timestamp = schedule_cache[cache_key]
+        if (datetime.now() - timestamp).seconds < CACHE_DURATION:
+            logger.info(f"Используем кеш для {cache_key}")
+            return cache_data
+
+    # Загружаем свежие данные
+    lessons = get_schedule_for_teacher(teacher_name, date_filter=date_filter)
+
+    # Сохраняем в кеш
+    schedule_cache[cache_key] = (lessons, datetime.now())
+
+    return lessons
 
 def format_lessons_for_display(lessons, date_filter=None):
     """Форматирует расписание для вывода пользователю."""
@@ -147,6 +191,21 @@ def filter_lessons_by_week(lessons, target_date=None):
         if date_str:
             lesson_date = datetime.strptime(date_str, "%Y-%m-%d")
             if start_of_week <= lesson_date <= end_of_week:
+                filtered.append(lesson)
+
+    return filtered
+
+def filter_lessons_by_month(lessons, target_date=None):
+    """Фильтрует занятия по текущему месяцу"""
+    if target_date is None:
+        target_date = datetime.now()
+
+    filtered = []
+    for lesson in lessons:
+        date_str = lesson.get('date', '')
+        if date_str:
+            lesson_date = datetime.strptime(date_str, "%Y-%m-%d")
+            if lesson_date.month == target_date.month and lesson_date.year == target_date.year:
                 filtered.append(lesson)
 
     return filtered
@@ -216,7 +275,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(welcome_text)
         db.add_user(user_id, user.username, user.first_name, user.last_name, "")
     else:
-        # Пользователь уже есть
+        # Пользователь уже есть - показываем меню
         await main_menu(update, context)
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -225,14 +284,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     data = query.data
-
-    if data == "set_teacher":
-        await query.edit_message_text(
-            "📚 Установи преподавателя командой:\n"
-            "/set_teacher Фамилия И.О.\n\n"
-            "Пример: /set_teacher Хаджинова Н.В."
-        )
-        return
 
     if data == "today":
         await today_callback(query, context)
@@ -286,34 +337,132 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await main_menu(update, context, query.from_user.id)
         return
 
-async def get_schedule_and_check(user_id, query=None):
-    """Получает расписание и проверяет наличие преподавателя"""
+async def today_callback(query, context):
+    """Показать расписание на сегодня (БЫСТРО)"""
+    user_id = query.from_user.id
     db_user = db.get_user(user_id)
+
     if not db_user or not db_user[4]:
-        msg = "❌ Сначала установи преподавателя командой:\n/set_teacher Фамилия И.О."
-        if query:
-            await query.edit_message_text(msg)
-        return None, None
+        await query.edit_message_text(
+            "❌ Сначала установи преподавателя командой:\n"
+            "/set_teacher Фамилия И.О."
+        )
+        return
 
     teacher_name = db_user[4]
 
-    if query:
-        await query.edit_message_text("⏳ Загрузка расписания...")
+    await query.edit_message_text("⏳ Загрузка расписания...")
 
-    schedule = get_schedule_for_teacher(teacher_name)
-    return schedule, teacher_name
+    # БЫСТРО - загружаем только сегодня
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    schedule = get_cached_schedule(teacher_name, date_filter=today_str)
 
-async def send_schedule_result(query, context, schedule, title, reply_markup=None):
-    """Отправляет расписание с обработкой длинных сообщений"""
-    formatted = format_lessons_for_display(schedule)
+    keyboard = [
+        [InlineKeyboardButton("📅 Завтра", callback_data="tomorrow")],
+        [InlineKeyboardButton("🔙 В меню", callback_data="back_to_menu")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
 
-    if not formatted or formatted == "📭 Занятий не найдено.":
-        await query.edit_message_text("📭 Занятий не найдено.", reply_markup=reply_markup)
+    formatted = format_lessons_for_display(schedule, today_str)
+
+    if not schedule or formatted == "📭 Занятий не найдено.":
+        await query.edit_message_text(
+            f"📭 На *сегодня* ({datetime.now().strftime('%d.%m.%Y')}) занятий нет.",
+            parse_mode="Markdown",
+            reply_markup=reply_markup
+        )
+        return
+
+    await query.edit_message_text(
+        f"📚 Расписание на *сегодня* ({datetime.now().strftime('%d.%m.%Y')}):\n\n{formatted}",
+        parse_mode="Markdown",
+        reply_markup=reply_markup
+    )
+
+async def tomorrow_callback(query, context):
+    """Показать расписание на завтра (БЫСТРО)"""
+    user_id = query.from_user.id
+    db_user = db.get_user(user_id)
+
+    if not db_user or not db_user[4]:
+        await query.edit_message_text(
+            "❌ Сначала установи преподавателя командой:\n"
+            "/set_teacher Фамилия И.О."
+        )
+        return
+
+    teacher_name = db_user[4]
+
+    await query.edit_message_text("⏳ Загрузка расписания...")
+
+    # БЫСТРО - загружаем только завтра
+    tomorrow_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    schedule = get_cached_schedule(teacher_name, date_filter=tomorrow_date)
+
+    keyboard = [
+        [InlineKeyboardButton("📅 Сегодня", callback_data="today")],
+        [InlineKeyboardButton("🔙 В меню", callback_data="back_to_menu")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    formatted = format_lessons_for_display(schedule, tomorrow_date)
+
+    if not schedule or formatted == "📭 Занятий не найдено.":
+        await query.edit_message_text(
+            f"📭 На *завтра* ({tomorrow_date}) занятий нет.",
+            parse_mode="Markdown",
+            reply_markup=reply_markup
+        )
+        return
+
+    await query.edit_message_text(
+        f"📚 Расписание на *завтра* ({tomorrow_date}):\n\n{formatted}",
+        parse_mode="Markdown",
+        reply_markup=reply_markup
+    )
+
+async def week_callback(query, context):
+    """Показать расписание на неделю"""
+    user_id = query.from_user.id
+    db_user = db.get_user(user_id)
+
+    if not db_user or not db_user[4]:
+        await query.edit_message_text(
+            "❌ Сначала установи преподавателя командой:\n"
+            "/set_teacher Фамилия И.О."
+        )
+        return
+
+    teacher_name = db_user[4]
+
+    await query.edit_message_text("⏳ Загрузка расписания...")
+
+    # Загружаем для недели
+    schedule = get_schedule_for_teacher(teacher_name, page_limit=5)
+
+    if not schedule:
+        await query.edit_message_text("❌ Не удалось получить расписание.")
+        return
+
+    week_lessons = filter_lessons_by_week(schedule)
+    formatted = format_lessons_for_display(week_lessons)
+
+    keyboard = [
+        [InlineKeyboardButton("📅 Месяц", callback_data="month")],
+        [InlineKeyboardButton("🔙 В меню", callback_data="back_to_menu")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    if not week_lessons:
+        await query.edit_message_text(
+            "📭 На текущей неделе занятий нет.",
+            reply_markup=reply_markup
+        )
         return
 
     if len(formatted) > 4000:
         parts = []
-        current_part = f"{title}\n\n"
+        current_part = "📚 Расписание на неделю:\n\n"
         for line in formatted.split('\n'):
             if len(current_part + line + '\n') > 4000:
                 parts.append(current_part)
@@ -323,90 +472,37 @@ async def send_schedule_result(query, context, schedule, title, reply_markup=Non
         parts.append(current_part)
 
         await query.edit_message_text(parts[0], parse_mode="Markdown", reply_markup=reply_markup)
-
         for part in parts[1:]:
-            await context.bot.send_message(chat_id=query.from_user.id, text=part, parse_mode="Markdown")
+            await context.bot.send_message(chat_id=user_id, text=part, parse_mode="Markdown")
     else:
-        await query.edit_message_text(f"{title}\n\n{formatted}", parse_mode="Markdown", reply_markup=reply_markup)
-
-async def today_callback(query, context):
-    """Показать расписание на сегодня"""
-    user_id = query.from_user.id
-    schedule, teacher_name = await get_schedule_and_check(user_id, query)
-    if not schedule:
-        return
-
-    db.save_schedule_cache(user_id, teacher_name, schedule)
-
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    today_lessons = [l for l in schedule if l.get("date") == today_str]
-
-    keyboard = [
-        [InlineKeyboardButton("📅 Завтра", callback_data="tomorrow")],
-        [InlineKeyboardButton("🔙 В меню", callback_data="back_to_menu")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    send_schedule_result(query, context, today_lessons,
-                        f"📚 Расписание на *сегодня* ({datetime.now().strftime('%d.%m.%Y')})",
-                        reply_markup)
-
-async def tomorrow_callback(query, context):
-    """Показать расписание на завтра"""
-    user_id = query.from_user.id
-    schedule, teacher_name = await get_schedule_and_check(user_id, query)
-    if not schedule:
-        return
-
-    tomorrow_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-    tomorrow_lessons = [l for l in schedule if l.get("date") == tomorrow_date]
-
-    keyboard = [
-        [InlineKeyboardButton("📅 Сегодня", callback_data="today")],
-        [InlineKeyboardButton("🔙 В меню", callback_data="back_to_menu")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    send_schedule_result(query, context, tomorrow_lessons,
-                        f"📚 Расписание на *завтра* ({tomorrow_date})",
-                        reply_markup)
-
-async def week_callback(query, context):
-    """Показать расписание на неделю"""
-    user_id = query.from_user.id
-    schedule, teacher_name = await get_schedule_and_check(user_id, query)
-    if not schedule:
-        return
-
-    week_lessons = filter_lessons_by_week(schedule)
-    db.save_schedule_cache(user_id, teacher_name, schedule)
-
-    keyboard = [
-        [InlineKeyboardButton("📅 Месяц", callback_data="month")],
-        [InlineKeyboardButton("🔙 В меню", callback_data="back_to_menu")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    send_schedule_result(query, context, week_lessons,
-                        "📚 Расписание на *текущую неделю*",
-                        reply_markup)
+        await query.edit_message_text(formatted, parse_mode="Markdown", reply_markup=reply_markup)
 
 async def month_callback(query, context):
     """Показать расписание на месяц"""
     user_id = query.from_user.id
-    schedule, teacher_name = await get_schedule_and_check(user_id, query)
-    if not schedule:
+    db_user = db.get_user(user_id)
+
+    if not db_user or not db_user[4]:
+        await query.edit_message_text(
+            "❌ Сначала установи преподавателя командой:\n"
+            "/set_teacher Фамилия И.О."
+        )
         return
 
-    # Фильтруем по текущему месяцу
-    now = datetime.now()
-    month_lessons = []
-    for lesson in schedule:
-        date_str = lesson.get('date', '')
-        if date_str:
-            lesson_date = datetime.strptime(date_str, "%Y-%m-%d")
-            if lesson_date.month == now.month and lesson_date.year == now.year:
-                month_lessons.append(lesson)
+    teacher_name = db_user[4]
+
+    await query.edit_message_text("⏳ Загрузка расписания...")
+
+    # Загружаем для месяца
+    schedule = get_schedule_for_teacher(teacher_name, page_limit=10)
+
+    if not schedule:
+        await query.edit_message_text("❌ Не удалось получить расписание.")
+        return
+
+    month_lessons = filter_lessons_by_month(schedule)
+    formatted = format_lessons_for_display(month_lessons)
+    month_name = datetime.now().strftime("%B %Y")
 
     keyboard = [
         [InlineKeyboardButton("📚 Все расписание", callback_data="all_schedule")],
@@ -414,27 +510,82 @@ async def month_callback(query, context):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    send_schedule_result(query, context, month_lessons,
-                        f"📚 Расписание на *{now.strftime('%B %Y')}*",
-                        reply_markup)
+    if not month_lessons:
+        await query.edit_message_text(
+            f"📭 На {month_name} занятий нет.",
+            reply_markup=reply_markup
+        )
+        return
+
+    if len(formatted) > 4000:
+        parts = []
+        current_part = f"📚 Расписание на {month_name}:\n\n"
+        for line in formatted.split('\n'):
+            if len(current_part + line + '\n') > 4000:
+                parts.append(current_part)
+                current_part = "📚 Продолжение:\n\n" + line + '\n'
+            else:
+                current_part += line + '\n'
+        parts.append(current_part)
+
+        await query.edit_message_text(parts[0], parse_mode="Markdown", reply_markup=reply_markup)
+        for part in parts[1:]:
+            await context.bot.send_message(chat_id=user_id, text=part, parse_mode="Markdown")
+    else:
+        await query.edit_message_text(formatted, parse_mode="Markdown", reply_markup=reply_markup)
 
 async def all_schedule_callback(query, context):
     """Показать всё расписание"""
     user_id = query.from_user.id
-    schedule, teacher_name = await get_schedule_and_check(user_id, query)
-    if not schedule:
+    db_user = db.get_user(user_id)
+
+    if not db_user or not db_user[4]:
+        await query.edit_message_text(
+            "❌ Сначала установи преподавателя командой:\n"
+            "/set_teacher Фамилия И.О."
+        )
         return
 
+    teacher_name = db_user[4]
+
+    await query.edit_message_text("⏳ Загрузка расписания...")
+
+    schedule = get_schedule_for_teacher(teacher_name, page_limit=10)
+
+    if not schedule:
+        await query.edit_message_text("❌ Не удалось получить расписание.")
+        return
+
+    formatted = format_lessons_for_display(schedule)
+
     keyboard = [
-        [InlineKeyboardButton("📅 Неделя", callback_data="week")],
-        [InlineKeyboardButton("📅 Месяц", callback_data="month")],
         [InlineKeyboardButton("🔙 В меню", callback_data="back_to_menu")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    send_schedule_result(query, context, schedule,
-                        "📚 *Все расписание*",
-                        reply_markup)
+    if not schedule:
+        await query.edit_message_text(
+            "📭 Расписания нет.",
+            reply_markup=reply_markup
+        )
+        return
+
+    if len(formatted) > 4000:
+        parts = []
+        current_part = "📚 Все расписание:\n\n"
+        for line in formatted.split('\n'):
+            if len(current_part + line + '\n') > 4000:
+                parts.append(current_part)
+                current_part = "📚 Продолжение:\n\n" + line + '\n'
+            else:
+                current_part += line + '\n'
+        parts.append(current_part)
+
+        await query.edit_message_text(parts[0], parse_mode="Markdown", reply_markup=reply_markup)
+        for part in parts[1:]:
+            await context.bot.send_message(chat_id=user_id, text=part, parse_mode="Markdown")
+    else:
+        await query.edit_message_text(formatted, parse_mode="Markdown", reply_markup=reply_markup)
 
 async def set_teacher(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Установка преподавателя для отслеживания"""
@@ -451,7 +602,7 @@ async def set_teacher(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     status_msg = await update.message.reply_text("⏳ Поиск расписания...")
 
-    schedule = get_schedule_for_teacher(teacher_name)
+    schedule = get_schedule_for_teacher(teacher_name, page_limit=3)
     if not schedule:
         await status_msg.edit_text(
             f"❌ Преподаватель '{teacher_name}' не найден.\n"
@@ -633,23 +784,24 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     status_msg = await update.message.reply_text("⏳ Загрузка расписания...")
 
-    schedule = get_schedule_for_teacher(teacher_name)
-
-    if not schedule:
-        await status_msg.edit_text("❌ Не удалось получить расписание.")
-        return
-
     today_str = datetime.now().strftime("%Y-%m-%d")
-    today_lessons = [l for l in schedule if l.get("date") == today_str]
-    formatted = format_lessons_for_display(today_lessons)
-
-    db.save_schedule_cache(user_id, teacher_name, schedule)
+    schedule = get_cached_schedule(teacher_name, date_filter=today_str)
 
     keyboard = [
         [InlineKeyboardButton("📅 Завтра", callback_data="tomorrow")],
         [InlineKeyboardButton("🔙 В меню", callback_data="back_to_menu")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
+
+    formatted = format_lessons_for_display(schedule, today_str)
+
+    if not schedule or formatted == "📭 Занятий не найдено.":
+        await status_msg.edit_text(
+            f"📭 На *сегодня* ({datetime.now().strftime('%d.%m.%Y')}) занятий нет.",
+            parse_mode="Markdown",
+            reply_markup=reply_markup
+        )
+        return
 
     await status_msg.edit_text(
         f"📚 Расписание на *сегодня* ({datetime.now().strftime('%d.%m.%Y')}):\n\n{formatted}",
@@ -673,21 +825,24 @@ async def tomorrow(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     status_msg = await update.message.reply_text("⏳ Загрузка расписания...")
 
-    schedule = get_schedule_for_teacher(teacher_name)
-
-    if not schedule:
-        await status_msg.edit_text("❌ Не удалось получить расписание.")
-        return
-
     tomorrow_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-    tomorrow_lessons = [l for l in schedule if l.get("date") == tomorrow_date]
-    formatted = format_lessons_for_display(tomorrow_lessons)
+    schedule = get_cached_schedule(teacher_name, date_filter=tomorrow_date)
 
     keyboard = [
         [InlineKeyboardButton("📅 Сегодня", callback_data="today")],
         [InlineKeyboardButton("🔙 В меню", callback_data="back_to_menu")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
+
+    formatted = format_lessons_for_display(schedule, tomorrow_date)
+
+    if not schedule or formatted == "📭 Занятий не найдено.":
+        await status_msg.edit_text(
+            f"📭 На *завтра* ({tomorrow_date}) занятий нет.",
+            parse_mode="Markdown",
+            reply_markup=reply_markup
+        )
+        return
 
     await status_msg.edit_text(
         f"📚 Расписание на *завтра* ({tomorrow_date}):\n\n{formatted}",
@@ -711,7 +866,7 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     status_msg = await update.message.reply_text("⏳ Загрузка расписания...")
 
-    schedule = get_schedule_for_teacher(teacher_name)
+    schedule = get_schedule_for_teacher(teacher_name, page_limit=5)
 
     if not schedule:
         await status_msg.edit_text("❌ Не удалось получить расписание.")
@@ -720,13 +875,18 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     week_lessons = filter_lessons_by_week(schedule)
     formatted = format_lessons_for_display(week_lessons)
 
-    db.save_schedule_cache(user_id, teacher_name, schedule)
-
     keyboard = [
         [InlineKeyboardButton("📅 Месяц", callback_data="month")],
         [InlineKeyboardButton("🔙 В меню", callback_data="back_to_menu")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
+
+    if not week_lessons:
+        await status_msg.edit_text(
+            "📭 На текущей неделе занятий нет.",
+            reply_markup=reply_markup
+        )
+        return
 
     if len(formatted) > 4000:
         parts = []
@@ -740,7 +900,6 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts.append(current_part)
 
         await status_msg.edit_text(parts[0], parse_mode="Markdown", reply_markup=reply_markup)
-
         for part in parts[1:]:
             await update.message.reply_text(part, parse_mode="Markdown")
     else:
@@ -753,7 +912,7 @@ async def check_changes(context: ContextTypes.DEFAULT_TYPE):
     users = db.get_all_users_with_teacher()
     for user_id, teacher_name in users:
         try:
-            current_schedule = get_schedule_for_teacher(teacher_name)
+            current_schedule = get_schedule_for_teacher(teacher_name, page_limit=5)
             if not current_schedule:
                 continue
 
@@ -847,7 +1006,7 @@ def main():
     application.add_handler(CommandHandler("help", help_command))
 
     # Регистрируем обработчики кнопок
-    application.add_handler(CallbackQueryHandler(button_callback, pattern="^(today|tomorrow|week|month|all_schedule|set_teacher|settings|help|notifications_on|notifications_off|stats|remove_teacher|back_to_menu)$"))
+    application.add_handler(CallbackQueryHandler(button_callback, pattern="^(today|tomorrow|week|month|all_schedule|settings|notifications_on|notifications_off|stats|remove_teacher|back_to_menu)$"))
 
     job_queue = application.job_queue
     if job_queue:
