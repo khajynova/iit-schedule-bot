@@ -141,6 +141,23 @@ def get_ics_calendar(query):
         logger.error(f"❌ Ошибка создания ICS: {e}")
         return f"Ошибка: {e}", 500
 
+    @flask_app.route('/test.ics')
+def test_ics():
+    """Тестовый ICS для проверки"""
+    from flask import Response
+    test_content = """BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Test//EN
+BEGIN:VEVENT
+SUMMARY:Тестовое событие
+DTSTART:20260702T190000
+DTEND:20260702T200000
+END:VEVENT
+END:VCALENDAR"""
+    response = Response(test_content, mimetype='text/calendar')
+    response.headers['Content-Disposition'] = 'attachment; filename="test.ics"'
+    return response
+
 def run_flask():
     """Запускает Flask сервер для keep-alive"""
     port = int(os.environ.get('PORT', 10000))
