@@ -2,3 +2,4 @@ python-telegram-bot[job-queue]>=21.0
 requests>=2.31.0
 python-dotenv>=1.0.0
 flask>=2.3.0
+icalendar>=5.0.0

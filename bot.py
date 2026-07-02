@@ -14,7 +14,9 @@ from dotenv import load_dotenv
 import json
 import threading
 import time
-from flask import Flask
+from flask import Flask, Response
+import urllib.parse
+import re
 
 # Импортируем нашу базу данных
 from database import Database
@@ -54,6 +56,72 @@ flask_app = Flask(__name__)
 @flask_app.route('/health')
 def health_check():
     return "✅ Бот работает!", 200
+
+# ============ ICS ЭНДПОИНТ ДЛЯ GOOGLE КАЛЕНДАРЯ ============
+@flask_app.route('/schedule/<path:query>.ics')
+def get_ics_calendar(query):
+    """
+    Генерирует ICS-файл для Google Календаря.
+    Пример: /schedule/Хаджинова%20Н.В..ics
+            /schedule/60131.ics
+    """
+    from icalendar import Calendar, Event
+
+    # Декодируем запрос
+    search_query = urllib.parse.unquote(query)
+    logger.info(f"📅 Запрос ICS для: {search_query}")
+
+    try:
+        # Получаем расписание
+        lessons = get_schedule_for_search(search_query, page_limit=10)
+
+        if not lessons:
+            logger.warning(f"❌ Не найдено занятий для {search_query}")
+            return "Занятий не найдено", 404
+
+        # Создаем календарь
+        cal = Calendar()
+        cal.add('prodid', '-//IIT Schedule Bot//iit.bsuir.by//')
+        cal.add('version', '2.0')
+        cal.add('calscale', 'GREGORIAN')
+        cal.add('x-wr-calname', f'Расписание {search_query}')
+
+        # Добавляем события
+        for lesson in lessons:
+            # Проверяем, содержит ли занятие искомый запрос
+            if search_query.lower() not in lesson.get('info', '').lower():
+                continue
+
+            location = lesson.get('room', '')
+            start_datetime_str = f"{lesson['date']} {lesson['start_time']}"
+            end_datetime_str = f"{lesson['date']} {lesson['end_time']}"
+
+            start_dt = datetime.strptime(start_datetime_str, "%Y-%m-%d %H:%M")
+            end_dt = datetime.strptime(end_datetime_str, "%Y-%m-%d %H:%M")
+
+            event = Event()
+            event.add('summary', lesson['info'])
+            event.add('dtstart', start_dt)
+            event.add('dtend', end_dt)
+            event.add('location', location)
+            event.add('description', f"Дата: {lesson['date']}\nВремя: {lesson['start_time']} - {lesson['end_time']}\nАудитория: {location}")
+
+            cal.add_component(event)
+
+        # Генерируем ICS
+        ics_content = cal.to_ical()
+
+        # Создаем ответ с правильными заголовками
+        response = Response(ics_content, mimetype='text/calendar')
+        response.headers['Content-Disposition'] = f'attachment; filename="{search_query}.ics"'
+        response.headers['Cache-Control'] = 'no-cache'
+
+        logger.info(f"✅ Создан ICS для {search_query} ({len(cal.subcomponents)} событий)")
+        return response
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка создания ICS: {e}")
+        return f"Ошибка: {e}", 500
 
 def run_flask():
     """Запускает Flask сервер для keep-alive"""
@@ -350,6 +418,7 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id=
     keyboard = [
         [InlineKeyboardButton("📚 Расписание", callback_data="schedule_menu")],
         [InlineKeyboardButton("⚙️ Настройки", callback_data="settings_menu")],
+        [InlineKeyboardButton("📅 Google Календарь", callback_data="calendar_help")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -609,6 +678,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await main_menu(update, context, query.from_user.id)
         return
 
+    if data == "calendar_help":
+        await calendar_help(update, context)
+        return
+
     # Расписание
     if data == "today":
         await today_callback(query, context)
@@ -656,6 +729,49 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await asyncio.sleep(0.5)
         await main_menu(update, context, query.from_user.id)
         return
+
+# ============ ПОМОЩЬ ПО КАЛЕНДАРЮ ============
+async def calendar_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает инструкцию по добавлению в Google Календарь"""
+    query = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+    db_user = db.get_user(user_id)
+
+    if not db_user or not db_user[4]:
+        await query.edit_message_text(
+            "❌ Сначала установи преподавателя или группу!\n\n"
+            "Используй команды:\n"
+            "/set_teacher Фамилия И.О.\n"
+            "/set_group Номер_группы"
+        )
+        return
+
+    search_query = db_user[4]
+    encoded_query = urllib.parse.quote(search_query)
+    ics_url = f"https://iit-schedule-bot.onrender.com/schedule/{encoded_query}.ics"
+
+    help_text = (
+        f"📅 *Google Календарь*\n\n"
+        f"Чтобы добавить расписание *{search_query}* в Google Календарь:\n\n"
+        f"1️⃣ Скопируй ссылку:\n"
+        f"`{ics_url}`\n\n"
+        f"2️⃣ Открой Google Календарь\n"
+        f"3️⃣ Нажми ➕ рядом с 'Другие календари'\n"
+        f"4️⃣ Выбери 'Добавить по URL'\n"
+        f"5️⃣ Вставь ссылку и нажми 'Добавить календарь'\n\n"
+        f"✅ После добавления расписание будет обновляться автоматически!"
+    )
+
+    keyboard = [[InlineKeyboardButton("🔙 В меню", callback_data="back_to_main")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(
+        help_text,
+        parse_mode="Markdown",
+        reply_markup=reply_markup
+    )
 
 # ============ ФУНКЦИИ РАСПИСАНИЯ ============
 async def today_callback(query, context):
@@ -1119,7 +1235,7 @@ def main():
     application.add_handler(CommandHandler("help", help_command))
 
     # Регистрируем обработчики кнопок
-    application.add_handler(CallbackQueryHandler(button_callback, pattern="^(schedule_menu|settings_menu|back_to_main|today|tomorrow|week|month|all_schedule|notifications_on|notifications_off|remove_teacher)$"))
+    application.add_handler(CallbackQueryHandler(button_callback, pattern="^(schedule_menu|settings_menu|back_to_main|today|tomorrow|week|month|all_schedule|notifications_on|notifications_off|remove_teacher|calendar_help)$"))
 
     # Настройка фоновой задачи для проверки изменений (каждые 5 минут)
     job_queue = application.job_queue
