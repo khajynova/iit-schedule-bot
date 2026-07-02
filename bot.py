@@ -115,7 +115,7 @@ def get_ics_calendar(query):
             ics_content,
             mimetype='text/calendar; charset=utf-8',
             headers={
-                'Content-Disposition': f'attachment; filename="{search_query}.ics"',
+                'Content-Disposition': f"attachment; filename*=UTF-8''{quote(search_query)}.ics",
                 'Content-Type': 'text/calendar; charset=utf-8',
                 'Cache-Control': 'no-cache',
                 'Access-Control-Allow-Origin': '*'
