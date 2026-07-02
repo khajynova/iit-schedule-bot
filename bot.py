@@ -70,7 +70,6 @@ def get_ics_calendar(query):
     import pytz
     from urllib.parse import quote
 
-    # Декодируем запрос из URL
     try:
         search_query = urllib.parse.unquote(query)
     except Exception:
@@ -79,46 +78,36 @@ def get_ics_calendar(query):
     logger.info(f"📅 Запрос ICS для: {search_query}")
 
     try:
-        # Получаем расписание
         lessons = get_schedule_for_search(search_query, page_limit=10)
 
         if not lessons:
             logger.warning(f"❌ Не найдено занятий для {search_query}")
             return f"Занятий для '{search_query}' не найдено", 404
 
-        # Создаем календарь
         cal = Calendar()
         cal.add('prodid', '-//IIT Schedule Bot//iit.bsuir.by//')
         cal.add('version', '2.0')
         cal.add('calscale', 'GREGORIAN')
         cal.add('x-wr-calname', f'Расписание {search_query}')
-
-        # Добавляем информацию о часовом поясе Минска
         cal.add('x-wr-timezone', 'Europe/Minsk')
 
-        # Создаем компонент VTIMEZONE для Минска
+        # Добавляем VTIMEZONE
         tz = vTimezone(
             tzid='Europe/Minsk',
             x_lic_location='Europe/Minsk'
         )
         cal.add_component(tz)
 
-        # Устанавливаем часовой пояс Минска
         tz_minsk = pytz.timezone('Europe/Minsk')
 
-        # Добавляем события
         for lesson in lessons:
             location = lesson.get('room', '')
-            start_datetime_str = f"{lesson['date']} {lesson['start_time']}"
-            end_datetime_str = f"{lesson['date']} {lesson['end_time']}"
+            start_dt = datetime.strptime(f"{lesson['date']} {lesson['start_time']}", "%Y-%m-%d %H:%M")
+            end_dt = datetime.strptime(f"{lesson['date']} {lesson['end_time']}", "%Y-%m-%d %H:%M")
 
-            # Создаем datetime (API уже возвращает время Минска)
-            start_dt = datetime.strptime(start_datetime_str, "%Y-%m-%d %H:%M")
-            end_dt = datetime.strptime(end_datetime_str, "%Y-%m-%d %H:%M")
-
-            # Просто помечаем время как время Минска (без сдвига)
-            start_dt = tz_minsk.localize(start_dt, is_dst=None)
-            end_dt = tz_minsk.localize(end_dt, is_dst=None)
+            # Маркируем время как Минское (без сдвига)
+            start_dt = tz_minsk.localize(start_dt)
+            end_dt = tz_minsk.localize(end_dt)
 
             event = Event()
             event.add('summary', lesson['info'])
@@ -128,10 +117,8 @@ def get_ics_calendar(query):
             event.add('description', f"Дата: {lesson['date']}\nВремя: {lesson['start_time']} - {lesson['end_time']}\nАудитория: {location}")
             cal.add_component(event)
 
-        # Генерируем ICS
         ics_content = cal.to_ical()
 
-        # Создаем ответ для скачивания
         response = Response(
             ics_content,
             mimetype='text/calendar; charset=utf-8',
