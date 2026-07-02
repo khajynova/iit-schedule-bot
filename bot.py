@@ -66,6 +66,7 @@ def get_ics_calendar(query):
             /schedule/60131.ics
     """
     from icalendar import Calendar, Event
+    from flask import Response
 
     # Декодируем запрос
     search_query = urllib.parse.unquote(query)
@@ -77,7 +78,18 @@ def get_ics_calendar(query):
 
         if not lessons:
             logger.warning(f"❌ Не найдено занятий для {search_query}")
-            return "Занятий не найдено", 404
+            return f"Занятий для '{search_query}' не найдено", 404
+
+        # Фильтруем только занятия с этим запросом
+        filtered_lessons = []
+        for lesson in lessons:
+            info = lesson.get('info', '')
+            if search_query.lower() in info.lower():
+                filtered_lessons.append(lesson)
+
+        if not filtered_lessons:
+            logger.warning(f"❌ Нет занятий с '{search_query}' в info")
+            return f"Нет занятий с '{search_query}'", 404
 
         # Создаем календарь
         cal = Calendar()
@@ -87,11 +99,7 @@ def get_ics_calendar(query):
         cal.add('x-wr-calname', f'Расписание {search_query}')
 
         # Добавляем события
-        for lesson in lessons:
-            # Проверяем, содержит ли занятие искомый запрос
-            if search_query.lower() not in lesson.get('info', '').lower():
-                continue
-
+        for lesson in filtered_lessons:
             location = lesson.get('room', '')
             start_datetime_str = f"{lesson['date']} {lesson['start_time']}"
             end_datetime_str = f"{lesson['date']} {lesson['end_time']}"
@@ -112,7 +120,7 @@ def get_ics_calendar(query):
         ics_content = cal.to_ical()
 
         # Создаем ответ с правильными заголовками
-        response = Response(ics_content, mimetype='text/calendar')
+        response = Response(ics_content, mimetype='text/calendar; charset=utf-8')
         response.headers['Content-Disposition'] = f'attachment; filename="{search_query}.ics"'
         response.headers['Cache-Control'] = 'no-cache'
 
