@@ -57,6 +57,7 @@ flask_app = Flask(__name__)
 def health_check():
     return "✅ Бот работает!", 200
 
+
 # ============ ICS ЭНДПОИНТ ДЛЯ GOOGLE КАЛЕНДАРЯ ============
 @flask_app.route('/schedule/<path:query>.ics')
 def get_ics_calendar(query):
@@ -64,8 +65,7 @@ def get_ics_calendar(query):
     Генерирует ICS-файл для Google Календаря.
     """
     from icalendar import Calendar, Event
-    from flask import Response, send_file
-    import io
+    from flask import Response
 
     # Декодируем запрос правильно
     try:
@@ -141,7 +141,9 @@ def get_ics_calendar(query):
         logger.error(f"❌ Ошибка создания ICS: {e}")
         return f"Ошибка: {e}", 500
 
-    @flask_app.route('/test.ics')
+
+# ============ ТЕСТОВЫЙ ICS ЭНДПОИНТ ============
+@flask_app.route('/test.ics')
 def test_ics():
     """Тестовый ICS для проверки"""
     from flask import Response
@@ -157,6 +159,9 @@ END:VCALENDAR"""
     response = Response(test_content, mimetype='text/calendar')
     response.headers['Content-Disposition'] = 'attachment; filename="test.ics"'
     return response
+
+
+# ===========================================
 
 def run_flask():
     """Запускает Flask сервер для keep-alive"""
