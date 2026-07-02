@@ -67,42 +67,30 @@ def get_ics_calendar(query):
     from icalendar import Calendar, Event
     from flask import Response
 
-    # Декодируем запрос правильно
+    # 1. Правильно декодируем запрос из URL
     try:
         search_query = urllib.parse.unquote(query)
-    except:
+    except Exception:
         search_query = query
 
     logger.info(f"📅 Запрос ICS для: {search_query}")
 
     try:
-        # Получаем расписание
+        # 2. Получаем РЕЗУЛЬТАТ, который уже отфильтрован функцией get_schedule_for_search
         lessons = get_schedule_for_search(search_query, page_limit=10)
 
         if not lessons:
             logger.warning(f"❌ Не найдено занятий для {search_query}")
             return f"Занятий для '{search_query}' не найдено", 404
 
-        # Фильтруем только занятия с этим запросом
-        filtered_lessons = []
-        for lesson in lessons:
-            info = lesson.get('info', '')
-            if search_query.lower() in info.lower():
-                filtered_lessons.append(lesson)
-
-        if not filtered_lessons:
-            logger.warning(f"❌ Нет занятий с '{search_query}' в info")
-            return f"Нет занятий с '{search_query}'", 404
-
-        # Создаем календарь
+        # 3. Создаем календарь и добавляем ВСЕ занятия из lessons (без дополнительной фильтрации)
         cal = Calendar()
         cal.add('prodid', '-//IIT Schedule Bot//iit.bsuir.by//')
         cal.add('version', '2.0')
         cal.add('calscale', 'GREGORIAN')
         cal.add('x-wr-calname', f'Расписание {search_query}')
 
-        # Добавляем события
-        for lesson in filtered_lessons:
+        for lesson in lessons:
             location = lesson.get('room', '')
             start_datetime_str = f"{lesson['date']} {lesson['start_time']}"
             end_datetime_str = f"{lesson['date']} {lesson['end_time']}"
@@ -119,10 +107,10 @@ def get_ics_calendar(query):
 
             cal.add_component(event)
 
-        # Генерируем ICS
+        # 4. Генерируем ICS
         ics_content = cal.to_ical()
 
-        # Создаем ответ для скачивания
+        # 5. Создаем ответ для скачивания
         response = Response(
             ics_content,
             mimetype='text/calendar; charset=utf-8',
