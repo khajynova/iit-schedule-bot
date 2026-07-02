@@ -1,20 +1,20 @@
-# Игнорируемые файлы для Git
 # Python
 __pycache__/
 *.py[cod]
+*.pyc
 *.so
 .Python
-*.pyc
 
 # База данных
 *.db
 *.sqlite3
+data/
 
 # Переменные окружения
 .env
 
-# Папка с данными
-data/
+# Сгенерированные ICS файлы
+*.ics
 
 # IDE
 .vscode/
@@ -23,3 +23,19 @@ data/
 # OS
 .DS_Store
 Thumbs.db
+
+# Виртуальное окружение
+venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Логи
+*.log
+
+# Настройки Python
+*.egg-info/
+dist/
+build/
