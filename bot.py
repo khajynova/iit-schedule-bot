@@ -62,14 +62,17 @@ def health_check():
 def get_ics_calendar(query):
     """
     Генерирует ICS-файл для Google Календаря.
-    Пример: /schedule/Хаджинова%20Н.В..ics
-            /schedule/60131.ics
     """
     from icalendar import Calendar, Event
-    from flask import Response
+    from flask import Response, send_file
+    import io
 
-    # Декодируем запрос
-    search_query = urllib.parse.unquote(query)
+    # Декодируем запрос правильно
+    try:
+        search_query = urllib.parse.unquote(query)
+    except:
+        search_query = query
+
     logger.info(f"📅 Запрос ICS для: {search_query}")
 
     try:
@@ -119,10 +122,17 @@ def get_ics_calendar(query):
         # Генерируем ICS
         ics_content = cal.to_ical()
 
-        # Создаем ответ с правильными заголовками
-        response = Response(ics_content, mimetype='text/calendar; charset=utf-8')
-        response.headers['Content-Disposition'] = f'attachment; filename="{search_query}.ics"'
-        response.headers['Cache-Control'] = 'no-cache'
+        # Создаем ответ для скачивания
+        response = Response(
+            ics_content,
+            mimetype='text/calendar; charset=utf-8',
+            headers={
+                'Content-Disposition': f'attachment; filename="{search_query}.ics"',
+                'Content-Type': 'text/calendar; charset=utf-8',
+                'Cache-Control': 'no-cache',
+                'Access-Control-Allow-Origin': '*'
+            }
+        )
 
         logger.info(f"✅ Создан ICS для {search_query} ({len(cal.subcomponents)} событий)")
         return response
