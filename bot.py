@@ -12,6 +12,9 @@ from telegram.ext import (
 import os
 from dotenv import load_dotenv
 import json
+import threading
+import time
+from flask import Flask
 
 # Импортируем нашу базу данных
 from database import Database
@@ -43,6 +46,32 @@ DAY_NAMES = {
 # Кеш для расписания
 schedule_cache = {}
 CACHE_DURATION = 3600  # 1 час
+
+# ============ FLASK KEEP-ALIVE ============
+flask_app = Flask(__name__)
+
+@flask_app.route('/')
+@flask_app.route('/health')
+def health_check():
+    return "✅ Бот работает!", 200
+
+def run_flask():
+    """Запускает Flask сервер для keep-alive"""
+    port = int(os.environ.get('PORT', 10000))
+    flask_app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+
+def keep_alive():
+    """Пинг самого себя для поддержания активности"""
+    while True:
+        time.sleep(300)  # Каждые 5 минут
+        try:
+            port = int(os.environ.get('PORT', 10000))
+            response = requests.get(f'http://localhost:{port}/health', timeout=5)
+            logger.info(f"🔄 Keep-alive ping: {response.status_code}")
+        except Exception as e:
+            logger.error(f"Ошибка keep-alive: {e}")
+
+# ===========================================
 
 def get_schedule_for_teacher(teacher_name, page_limit=10, date_filter=None):
     """
@@ -1048,6 +1077,16 @@ def main():
         return
 
     os.makedirs("data", exist_ok=True)
+
+    # Запускаем Flask в отдельном потоке
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info("🌐 Flask сервер запущен для keep-alive")
+
+    # Запускаем keep-alive пинг в отдельном потоке
+    keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
+    keep_alive_thread.start()
+    logger.info("🔄 Keep-alive пинг запущен")
 
     # Создаем новый event loop для Python 3.14
     try:
