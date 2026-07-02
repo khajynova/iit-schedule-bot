@@ -70,7 +70,7 @@ def get_ics_calendar(query):
     import pytz
     from urllib.parse import quote
 
-    # 1. Декодируем запрос из URL
+    # Декодируем запрос из URL
     try:
         search_query = urllib.parse.unquote(query)
     except Exception:
@@ -93,11 +93,10 @@ def get_ics_calendar(query):
         cal.add('calscale', 'GREGORIAN')
         cal.add('x-wr-calname', f'Расписание {search_query}')
 
-        # Добавляем часовой пояс Минска
+        # Добавляем информацию о часовом поясе Минска
         cal.add('x-wr-timezone', 'Europe/Minsk')
-        cal.add('tzid', 'Europe/Minsk')
 
-        # Добавляем VTIMEZONE компонент
+        # Создаем компонент VTIMEZONE для Минска
         tz = vTimezone(
             tzid='Europe/Minsk',
             x_lic_location='Europe/Minsk'
@@ -113,13 +112,13 @@ def get_ics_calendar(query):
             start_datetime_str = f"{lesson['date']} {lesson['start_time']}"
             end_datetime_str = f"{lesson['date']} {lesson['end_time']}"
 
-            # Создаем datetime и добавляем часовой пояс
+            # Создаем datetime (API уже возвращает время Минска)
             start_dt = datetime.strptime(start_datetime_str, "%Y-%m-%d %H:%M")
             end_dt = datetime.strptime(end_datetime_str, "%Y-%m-%d %H:%M")
 
-            # Локализуем время в часовом поясе Минска
-            start_dt = tz_minsk.localize(start_dt)
-            end_dt = tz_minsk.localize(end_dt)
+            # Просто помечаем время как время Минска (без сдвига)
+            start_dt = tz_minsk.localize(start_dt, is_dst=None)
+            end_dt = tz_minsk.localize(end_dt, is_dst=None)
 
             event = Event()
             event.add('summary', lesson['info'])
